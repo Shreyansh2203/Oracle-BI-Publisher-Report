@@ -1,7 +1,7 @@
 # BIP Downloader — FastAPI Service
 
 ## Overview
-FastAPI service that downloads Oracle BI Publisher reports via SOAP, with in-memory caching, parallel batch downloads, and optional auto-commit to GitHub after each successful download.
+FastAPI service that downloads Oracle BI Publisher reports via SOAP, with in-memory caching, parallel batch downloads, and optional auto-commit to GitHub after each successful download. On-demand only — every request runs a `FILE_AGE_THRESHOLD_HOURS` check against the latest GitHub copy and only re-fetches from Oracle when it's stale or missing.
 
 ---
 
@@ -17,11 +17,10 @@ FastAPI-Service/
 │   ├── cache.py             # ReportCache — TTL-based in-memory cache
 │   ├── exceptions.py        # AuthError, ReportError
 │   ├── github.py            # commit_report, get_latest_report_from_github — GitHub Contents API
-│   ├── scheduler.py         # Background loop: refresh_all_reports, run_scheduler
-│   ├── models.py            # DownloadRequest, BatchDownloadRequest, ReportItem, ReportListResponse, HealthResponse
+│   ├── models.py            # DownloadRequest, ReportRequest, ReportItem, ReportListResponse, HealthResponse
 │   └── routers/
 │       ├── __init__.py
-│       └── reports.py       # /reports, /reports/download, /reports/download-batch
+│       └── reports.py       # /reports, /reports/download (handles single or batch)
 ├── tests/
 │   ├── __init__.py
 │   └── test_api.py
@@ -52,8 +51,7 @@ FastAPI-Service/
 | `GITHUB_BRANCH` | no | `main` | Branch to commit to |
 | `GITHUB_REPORTS_DIR` | no | `reports` | Directory inside the repo |
 | `FILE_AGE_THRESHOLD_HOURS` | no | `4.0` | Skip Oracle if a GitHub file for this report is younger than this |
-| `SCHEDULE_ENABLED` | no | `false` | Enable background auto-refresh scheduler |
-| `SCHEDULE_INTERVAL_HOURS` | no | `1.0` | How often the scheduler checks for stale reports |
+| `CORS_ORIGINS` | no | `*` | Comma-separated list of allowed origins, or `*` for any |
 
 ---
 
@@ -66,38 +64,36 @@ Returns `{"status": "ok", "version": "0.1.0"}`.
 Lists all reports configured in `reports.txt`.
 
 ### `POST /reports/download`
-Downloads a single report. Returns CSV file as attachment.
+Downloads one or more reports. The body is **always** a list — single or
+multi — under a `reports` key. Response type is determined by the count:
 
-**Request body:**
-```json
-{
-  "report_path": "/Custom/Finance/AR_Aging_Report.xdo",
-  "customer_name": "Acme Corp",
-  "from_date": "01-01-2024",
-  "to_date": "31-03-2024"
-}
-```
-- `customer_name`, `from_date`, `to_date` are optional
-- Dates must be `DD-MM-YYYY`
-- **Fetch priority**: in-memory cache → GitHub file-age check → Oracle SOAP
-- GitHub commit only happens when the file is fetched fresh from Oracle (not when served from cache or GitHub)
+| `len(reports)` | Response |
+|---|---|
+| 1 | Raw CSV file (`Content-Type: text/csv`) |
+| 2+ | ZIP archive (`Content-Type: application/zip`) |
+| 0 | HTTP 400 |
 
-### `POST /reports/download-batch`
-Downloads multiple reports in parallel via `asyncio.gather`. Returns a ZIP archive.
-
-**Request body:**
+**Body:**
 ```json
 {
   "reports": [
-    {"report_path": "/Custom/Finance/AR_Aging_Report.xdo"},
-    {"report_path": "/Custom/Finance/AP_Report.xdo", "from_date": "01-01-2024", "to_date": "31-03-2024"}
+    {
+      "report_path": "/Custom/Finance/AR_Aging_Report.xdo",
+      "customer_name": "Acme Corp",
+      "from_date": "01-01-2024",
+      "to_date": "31-03-2024"
+    }
   ]
 }
 ```
-- Partial failures: if some reports fail with `ReportError`, they are skipped and logged; the ZIP still returns with successful reports
-- If all fail, returns HTTP 502
-- If any fail with `AuthError`, returns HTTP 401 immediately
-- Response headers: `X-Succeeded-Count`, `X-Failed-Count`, `X-Failed-Reports`
+
+- `customer_name`, `from_date`, `to_date` are optional. Dates must be `DD-MM-YYYY`.
+- A bare `{"report_path": "..."}` (no `reports` wrapper) is rejected with HTTP 422.
+- Multi-report fetches run in parallel via `asyncio.gather` and respect `MAX_BATCH_SIZE`.
+- **Fetch priority**: in-memory cache → GitHub file-age check → Oracle SOAP. GitHub commit only happens for fresh-from-Oracle fetches (and never for filtered requests — see filter-bypass note below).
+- **Errors (multi-report)**: any `AuthError` short-circuits to HTTP 401; `ReportError`s are collected, the ZIP returns with whatever succeeded, and listed in `X-Failed-Reports`. If everything fails → HTTP 502.
+- **Errors (single-report)**: `AuthError` → 401, `ReportError` → 502.
+- **Multi-report response headers**: `X-Succeeded-Count`, `X-Failed-Count`, `X-Failed-Reports`.
 
 ---
 
@@ -136,8 +132,9 @@ Downloads multiple reports in parallel via `asyncio.gather`. Returns a ZIP archi
 
 ### File-age decision flow
 
-`FILE_AGE_THRESHOLD_HOURS` (default `4`) drives this branching, applied identically by
-`_fetch` (on-demand) and `refresh_all_reports` (scheduler):
+`FILE_AGE_THRESHOLD_HOURS` (default `4`) drives this branching, applied on every
+`/reports/download` and `/reports/download-batch` call (no scheduler — purely
+on-demand):
 
 ```
                    ┌────────────────────────┐
@@ -178,19 +175,18 @@ Downloads multiple reports in parallel via `asyncio.gather`. Returns a ZIP archi
   finds `{stem}_YYYYMMDD_HHMMSS.csv` files, parses timestamp from filename,
   returns `(filename, bytes)` if fresh, `None` if stale/missing
 
-### Scheduler (`scheduler.py`)
-- `run_scheduler(settings, session)` — async loop started in lifespan when `SCHEDULE_ENABLED=true`
-- Runs `refresh_all_reports` immediately on startup, then every `SCHEDULE_INTERVAL_HOURS`
-- `refresh_all_reports` iterates every path in `reports.txt`, applies the same file-age logic:
-  - GitHub file fresh → skip
-  - Missing or stale → fetch from Oracle + commit to GitHub
 
 ### App startup (`main.py`)
 - Shared `requests.Session` created once in lifespan, closed on shutdown
 - `ReportCache` initialized from `CACHE_TTL`; set to `None` if disabled
 - Request-logging middleware adds `X-Request-Id` header to every response
 - `/docs` and `/redoc` only available when `DEBUG=true`
-- CORS: currently `allow_origins=["*"]` — restrict when API auth is added
+- CORS allowed origins read from `CORS_ORIGINS` env var (`*` by default; comma-separate to whitelist specific origins)
+
+### Error sanitization (`client.py`)
+
+- HTTP-level Oracle errors and SOAP `<faultstring>` bodies are **logged in full** but **never echoed in the response**. Callers see `Oracle BIP returned HTTP <code>` or `Oracle BIP returned an error (see server logs)`. Auth errors keep a clear `Oracle BIP authentication failed` message.
+- Reason: Oracle responses can include filesystem paths, principal names, and stack hints. Don't surface those to API consumers — operators read the server log instead.
 
 ---
 
@@ -213,13 +209,45 @@ Open `http://localhost:8000/docs`.
 
 ## Deployment (Render)
 
-`render.yaml` is configured for Render free tier:
-- Build: `pip install -e .`
-- Start: `uvicorn bip_api.main:app --host 0.0.0.0 --port $PORT`
-- Set all environment variables in the Render dashboard (do not commit `.env`)
+`render.yaml` is a Blueprint manifest configured for Render's free tier.
+
+**Key fields:**
+- `rootDir: FastAPI-Service` — Render builds from this subdirectory of the repo (the project lives in a sub-folder, not at repo root).
+- `healthCheckPath: /health` — Render polls `/health` for zero-downtime deploys and instance health.
+- `plan: free` — sleeps after 15 min idle, ~30–60 s cold start; 750 free hours/month.
+- `buildCommand: pip install .` (non-editable; editable installs aren't intended for production runtimes)
+- `startCommand: uvicorn bip_api.main:app --host 0.0.0.0 --port $PORT`
+
+**Setup steps:**
+1. Push the repo to GitHub.
+2. Render → **New** → **Blueprint** → connect repo. Render reads `render.yaml`.
+3. In the dashboard, set the `sync: false` secrets by hand:
+   - `ORACLE_USERNAME`, `ORACLE_PASSWORD`, `ORACLE_BASE_URL`
+   - `GITHUB_TOKEN` (fine-grained PAT with `Contents: Read & write` on the target repo), `GITHUB_REPO` (`owner/repo`).
+   - Leave `GITHUB_TOKEN`/`GITHUB_REPO` empty to disable auto-commit.
+4. Verify: `curl https://<service>.onrender.com/health` → `{"status":"ok",...}`.
+
+**Free-tier caveats:**
+
+- The in-memory `ReportCache` resets on every cold start (sleep ⇒ wake). Not a correctness issue — first request after wake just falls through to the GitHub-or-Oracle path.
+- The first request after a sleep adds ~30–60 s while the dyno wakes. Subsequent calls are normal speed.
+- No always-on background work happens — fine because the scheduler was removed; the service is purely on-demand.
+
+---
+
+## CI
+
+`.github/workflows/ci-fastapi.yml` runs on push and PR when anything under `FastAPI-Service/` changes:
+
+1. `pip install -e ".[dev]"`
+2. `ruff check src tests`
+3. `mypy src`
+4. `pytest --tb=short`
+
+The root CLI project has its own separate workflow (`ci.yml`) — they don't share state.
 
 ---
 
 ## Pending / Not Yet Implemented
-- API key authentication (explicitly deferred by user — "will add it later")
-- CORS origins should be restricted once auth is added
+
+- **API key authentication** (deferred by user — "will add it later"). When added, also tighten `CORS_ORIGINS` from `*` to the actual caller origins.

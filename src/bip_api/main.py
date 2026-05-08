@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 import uuid
@@ -17,7 +16,6 @@ from bip_api.client import make_session
 from bip_api.config import get_settings
 from bip_api.models import HealthResponse
 from bip_api.routers import reports
-from bip_api.scheduler import run_scheduler
 
 log = logging.getLogger(__name__)
 
@@ -29,15 +27,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.http_session = session
     app.state.report_cache = ReportCache(settings.cache_ttl) if settings.cache_ttl > 0 else None
 
-    scheduler_task: asyncio.Task[None] | None = None
-    if settings.schedule_enabled:
-        scheduler_task = asyncio.create_task(run_scheduler(settings, session))
-        log.info(
-            "Scheduler enabled: interval=%.1fh threshold=%.1fh",
-            settings.schedule_interval_hours,
-            settings.file_age_threshold_hours,
-        )
-
     log.info(
         "Started: pool_size=%d cache_ttl=%ds",
         settings.http_pool_size,
@@ -45,8 +34,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     yield
 
-    if scheduler_task:
-        scheduler_task.cancel()
     session.close()
     log.info("Stopped")
 
@@ -64,9 +51,14 @@ def create_app() -> FastAPI:
         redoc_url="/redoc" if settings.debug else None,
     )
 
+    origins = (
+        ["*"]
+        if settings.cors_origins.strip() == "*"
+        else [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
+    )
     application.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],  # Restrict to specific origins in production
+        allow_origins=origins,
         allow_methods=["GET", "POST"],
         allow_headers=["*"],
     )

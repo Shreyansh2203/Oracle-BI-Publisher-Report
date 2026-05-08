@@ -16,10 +16,10 @@ from bip_api.config import Settings, get_settings
 from bip_api.exceptions import AuthError, ReportError
 from bip_api.github import commit_report, get_latest_report_from_github
 from bip_api.models import (
-    BatchDownloadRequest,
     DownloadRequest,
     ReportItem,
     ReportListResponse,
+    ReportRequest,
 )
 
 log = logging.getLogger(__name__)
@@ -98,46 +98,37 @@ async def list_reports(settings: Settings = Depends(get_settings)) -> ReportList
     return ReportListResponse(reports=items)
 
 
-@router.post("/download")
-async def download_report(
-    req: DownloadRequest,
+def _commit_task(
     background_tasks: BackgroundTasks,
-    settings: Settings = Depends(get_settings),
-    session: requests.Session = Depends(_get_session),
-    cache: ReportCache | None = Depends(_get_cache),
-) -> Response:
-    """Download a single report. Saves to GitHub in the background if configured."""
-    outcome = await _fetch(req, settings, session, cache)
-    if isinstance(outcome, AuthError):
-        raise HTTPException(status_code=401, detail=str(outcome))
-    if isinstance(outcome, ReportError):
-        raise HTTPException(status_code=502, detail=str(outcome))
-
+    outcome: _FetchResult,
+    settings: Settings,
+    session: requests.Session,
+) -> None:
     if outcome.commit_to_github:
         background_tasks.add_task(
             commit_report, outcome.filename, outcome.csv_bytes, settings, session
         )
 
-    return Response(
-        content=outcome.csv_bytes,
-        media_type="text/csv",
-        headers={
-            "Content-Disposition": f'attachment; filename="{outcome.filename}"',
-            "Content-Length": str(len(outcome.csv_bytes)),
-        },
-    )
 
-
-@router.post("/download-batch")
-async def download_batch(
-    req: BatchDownloadRequest,
+@router.post("/download")
+async def download(
+    req: ReportRequest,
     background_tasks: BackgroundTasks,
     settings: Settings = Depends(get_settings),
     session: requests.Session = Depends(_get_session),
     cache: ReportCache | None = Depends(_get_cache),
-) -> StreamingResponse:
-    """Download multiple reports in parallel and return them as a ZIP archive.
-    Each successful report is saved to GitHub in the background if configured."""
+) -> Response:
+    """
+    Download one or more reports.
+
+    Body accepts either shape:
+      - single: `{"report_path": "...", "customer_name": "...", ...}`
+      - batch:  `{"reports": [{"report_path": "..."}, ...]}`
+
+    Returns a CSV file when one report is requested, a ZIP archive when more
+    than one is requested. Successful fresh-from-Oracle fetches are committed
+    to GitHub in the background if configured.
+    """
     if not req.reports:
         raise HTTPException(status_code=400, detail="No reports specified")
     if len(req.reports) > settings.max_batch_size:
@@ -150,6 +141,25 @@ async def download_batch(
         *[_fetch(item, settings, session, cache) for item in req.reports]
     )
 
+    # Single report → return raw CSV
+    if len(req.reports) == 1:
+        outcome = outcomes[0]
+        if isinstance(outcome, AuthError):
+            raise HTTPException(status_code=401, detail=str(outcome))
+        if isinstance(outcome, ReportError):
+            raise HTTPException(status_code=502, detail=str(outcome))
+
+        _commit_task(background_tasks, outcome, settings, session)
+        return Response(
+            content=outcome.csv_bytes,
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": f'attachment; filename="{outcome.filename}"',
+                "Content-Length": str(len(outcome.csv_bytes)),
+            },
+        )
+
+    # Multiple reports → bundle into a ZIP
     buf = io.BytesIO()
     fetch_errors: list[str] = []
     success_count = 0
@@ -162,10 +172,7 @@ async def download_batch(
                 fetch_errors.append(f"{item.report_path}: {outcome}")
             else:
                 zf.writestr(outcome.filename, outcome.csv_bytes)
-                if outcome.commit_to_github:
-                    background_tasks.add_task(
-                        commit_report, outcome.filename, outcome.csv_bytes, settings, session
-                    )
+                _commit_task(background_tasks, outcome, settings, session)
                 success_count += 1
 
     if success_count == 0:

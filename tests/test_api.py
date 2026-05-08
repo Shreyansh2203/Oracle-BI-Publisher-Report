@@ -9,9 +9,11 @@ import pytest
 import requests
 from fastapi.testclient import TestClient
 
+from bip_api.client import fetch_report_csv
 from bip_api.config import Settings, get_settings
 from bip_api.exceptions import AuthError, ReportError
 from bip_api.main import app
+from bip_api.models import DownloadRequest
 from bip_api.routers.reports import _get_session
 
 FAKE_SETTINGS = Settings(
@@ -74,10 +76,14 @@ def test_list_reports_with_file(client: TestClient, tmp_path: Path) -> None:
     app.dependency_overrides[get_settings] = lambda: FAKE_SETTINGS
 
 
+def _single_body(report_path: str = FAKE_REPORT_PATH, **extra: str) -> dict[str, object]:
+    return {"reports": [{"report_path": report_path, **extra}]}
+
+
 @patch("bip_api.routers.reports.fetch_report_csv")
 def test_download_report_success(mock_fetch: MagicMock, client: TestClient) -> None:
     mock_fetch.return_value = ("AR_Report.csv", CSV_BYTES)
-    resp = client.post("/reports/download", json={"report_path": FAKE_REPORT_PATH})
+    resp = client.post("/reports/download", json=_single_body())
     assert resp.status_code == 200
     assert "text/csv" in resp.headers["content-type"]
     assert resp.content == CSV_BYTES
@@ -86,7 +92,7 @@ def test_download_report_success(mock_fetch: MagicMock, client: TestClient) -> N
 @patch("bip_api.routers.reports.fetch_report_csv")
 def test_download_report_auth_error(mock_fetch: MagicMock, client: TestClient) -> None:
     mock_fetch.side_effect = AuthError("Bad credentials")
-    resp = client.post("/reports/download", json={"report_path": FAKE_REPORT_PATH})
+    resp = client.post("/reports/download", json=_single_body())
     assert resp.status_code == 401
     assert "Bad credentials" in resp.json()["detail"]
 
@@ -94,34 +100,49 @@ def test_download_report_auth_error(mock_fetch: MagicMock, client: TestClient) -
 @patch("bip_api.routers.reports.fetch_report_csv")
 def test_download_report_report_error(mock_fetch: MagicMock, client: TestClient) -> None:
     mock_fetch.side_effect = ReportError("Report not found")
-    resp = client.post("/reports/download", json={"report_path": FAKE_REPORT_PATH})
+    resp = client.post("/reports/download", json=_single_body())
     assert resp.status_code == 502
     assert "Report not found" in resp.json()["detail"]
 
 
+def test_download_rejects_bare_single_shape(client: TestClient) -> None:
+    """The endpoint requires `{"reports": [...]}`; a bare DownloadRequest is invalid."""
+    resp = client.post("/reports/download", json={"report_path": FAKE_REPORT_PATH})
+    assert resp.status_code == 422
+
+
 def test_download_batch_empty(client: TestClient) -> None:
-    resp = client.post("/reports/download-batch", json={"reports": []})
+    resp = client.post("/reports/download", json={"reports": []})
     assert resp.status_code == 400
 
 
 def test_download_batch_exceeds_limit(client: TestClient) -> None:
     reports = [{"report_path": FAKE_REPORT_PATH}] * 21
-    resp = client.post("/reports/download-batch", json={"reports": reports})
+    resp = client.post("/reports/download", json={"reports": reports})
     assert resp.status_code == 400
     assert "exceeds limit" in resp.json()["detail"]
 
 
 @patch("bip_api.routers.reports.fetch_report_csv")
-def test_download_batch_success(mock_fetch: MagicMock, client: TestClient) -> None:
-    mock_fetch.return_value = ("AR_Report.csv", CSV_BYTES)
+def test_download_multi_returns_zip(mock_fetch: MagicMock, client: TestClient) -> None:
+    """A request with two reports should return a ZIP archive."""
+    mock_fetch.side_effect = [
+        ("AR_Report.csv", CSV_BYTES),
+        ("AP_Report.csv", b"col3,col4\n"),
+    ]
     resp = client.post(
-        "/reports/download-batch",
-        json={"reports": [{"report_path": FAKE_REPORT_PATH}]},
+        "/reports/download",
+        json={
+            "reports": [
+                {"report_path": FAKE_REPORT_PATH},
+                {"report_path": "/Custom/Finance/AP_Report.xdo"},
+            ]
+        },
     )
     assert resp.status_code == 200
     assert resp.headers["content-type"] == "application/zip"
     with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
-        assert "AR_Report.csv" in zf.namelist()
+        assert sorted(zf.namelist()) == ["AP_Report.csv", "AR_Report.csv"]
         assert zf.read("AR_Report.csv") == CSV_BYTES
 
 
@@ -129,8 +150,13 @@ def test_download_batch_success(mock_fetch: MagicMock, client: TestClient) -> No
 def test_download_batch_auth_error(mock_fetch: MagicMock, client: TestClient) -> None:
     mock_fetch.side_effect = AuthError("Unauthorized")
     resp = client.post(
-        "/reports/download-batch",
-        json={"reports": [{"report_path": FAKE_REPORT_PATH}]},
+        "/reports/download",
+        json={
+            "reports": [
+                {"report_path": FAKE_REPORT_PATH},
+                {"report_path": "/Custom/Finance/AP_Report.xdo"},
+            ]
+        },
     )
     assert resp.status_code == 401
 
@@ -139,8 +165,13 @@ def test_download_batch_auth_error(mock_fetch: MagicMock, client: TestClient) ->
 def test_download_batch_all_errors_returns_502(mock_fetch: MagicMock, client: TestClient) -> None:
     mock_fetch.side_effect = ReportError("not found")
     resp = client.post(
-        "/reports/download-batch",
-        json={"reports": [{"report_path": FAKE_REPORT_PATH}]},
+        "/reports/download",
+        json={
+            "reports": [
+                {"report_path": FAKE_REPORT_PATH},
+                {"report_path": "/Custom/Finance/AP_Report.xdo"},
+            ]
+        },
     )
     assert resp.status_code == 502
 
@@ -160,7 +191,7 @@ def test_filtered_request_bypasses_github(
 
     resp = client.post(
         "/reports/download",
-        json={"report_path": FAKE_REPORT_PATH, "customer_name": "Acme Corp"},
+        json=_single_body(customer_name="Acme Corp"),
     )
 
     assert resp.status_code == 200
@@ -168,6 +199,45 @@ def test_filtered_request_bypasses_github(
     mock_github.assert_not_called()
     mock_fetch.assert_called_once()
     mock_commit.assert_not_called()
+
+
+def test_fetch_report_csv_sanitizes_http_error_body() -> None:
+    """A non-2xx response from Oracle must not be echoed back in the raised error."""
+    session = MagicMock(spec=requests.Session)
+    response = MagicMock()
+    response.status_code = 500
+    response.ok = False
+    response.text = "Internal Oracle error: /opt/oracle/secrets/keystore exposed"
+    session.post.return_value = response
+
+    req = DownloadRequest(report_path="/Custom/X.xdo")
+    with pytest.raises(ReportError) as exc:
+        fetch_report_csv(req, FAKE_SETTINGS, session)
+
+    msg = str(exc.value)
+    assert "/opt/oracle" not in msg
+    assert "keystore" not in msg
+    assert "500" in msg  # status code is fine to expose
+
+
+def test_fetch_report_csv_sanitizes_soap_fault() -> None:
+    """A SOAP <faultstring> must be logged but not surfaced in the error message."""
+    session = MagicMock(spec=requests.Session)
+    response = MagicMock()
+    response.status_code = 200
+    response.ok = True
+    response.text = (
+        "<soapenv:Envelope><faultstring>"
+        "java.io.FileNotFoundException: /opt/oracle/internal/path"
+        "</faultstring></soapenv:Envelope>"
+    )
+    session.post.return_value = response
+
+    req = DownloadRequest(report_path="/Custom/X.xdo")
+    with pytest.raises(ReportError) as exc:
+        fetch_report_csv(req, FAKE_SETTINGS, session)
+    assert "FileNotFoundException" not in str(exc.value)
+    assert "/opt/oracle" not in str(exc.value)
 
 
 @patch("bip_api.routers.reports.commit_report")
@@ -182,7 +252,7 @@ def test_unfiltered_request_uses_github_cache(
     """An unfiltered request should serve from GitHub when a fresh file exists."""
     mock_github.return_value = ("AR_Report_20250101_120000.csv", CSV_BYTES)
 
-    resp = client.post("/reports/download", json={"report_path": FAKE_REPORT_PATH})
+    resp = client.post("/reports/download", json=_single_body())
 
     assert resp.status_code == 200
     assert resp.content == CSV_BYTES

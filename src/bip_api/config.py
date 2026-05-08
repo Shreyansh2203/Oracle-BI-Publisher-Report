@@ -26,9 +26,9 @@ class Settings(BaseSettings):
     # File-age check: skip Oracle if a GitHub file is younger than this threshold
     file_age_threshold_hours: float = 4.0
 
-    # Scheduler — auto-refresh all reports.txt entries on a background loop
-    schedule_enabled: bool = False
-    schedule_interval_hours: float = 1.0  # how often the scheduler checks
+    # Comma-separated origins for CORS, or "*" for any. Tighten in production
+    # (e.g. "https://reports.example.com,https://dashboards.example.com").
+    cors_origins: str = "*"
 
     debug: bool = False
 

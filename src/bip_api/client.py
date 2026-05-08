@@ -127,7 +127,15 @@ def fetch_report_csv(
         raise AuthError("Oracle BIP authentication failed — check credentials")
 
     if not response.ok:
-        raise ReportError(f"BIP returned HTTP {response.status_code}: {response.text[:400]}")
+        # Log full body internally; return a generic message to the caller so we
+        # don't echo Oracle internals (paths, principals, stack hints) back over HTTP.
+        log.error(
+            "BIP HTTP %d for %s: %s",
+            response.status_code,
+            req.report_path,
+            response.text[:1000],
+        )
+        raise ReportError(f"Oracle BIP returned HTTP {response.status_code}")
 
     text = response.text
 
@@ -135,12 +143,14 @@ def fetch_report_csv(
     if fault_match:
         fault = fault_match.group(1).strip()
         if "Invalid username or password" in fault or "Authentication" in fault:
-            raise AuthError(fault)
-        raise ReportError(fault)
+            raise AuthError("Oracle BIP authentication failed")
+        log.error("BIP SOAP fault for %s: %s", req.report_path, fault)
+        raise ReportError("Oracle BIP returned an error (see server logs)")
 
     bytes_match = _RE_REPORT_BYTES.search(text)
     if not bytes_match:
-        raise ReportError("No reportBytes found in SOAP response")
+        log.error("BIP response missing reportBytes for %s: %s", req.report_path, text[:1000])
+        raise ReportError("Oracle BIP returned an unexpected response shape")
 
     csv_bytes = base64.b64decode(bytes_match.group(1))
 

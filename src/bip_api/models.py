@@ -45,12 +45,20 @@ class DownloadRequest(BaseModel):
         return bool(self.customer_name or self.from_date or self.to_date)
 
 
-class BatchDownloadRequest(BaseModel):
+class ReportRequest(BaseModel):
+    """
+    Request body for `POST /reports/download`.
+
+    Always a list of one or more `DownloadRequest`s. The endpoint returns a
+    raw CSV when `len(reports) == 1` and a ZIP archive when `len(reports) > 1`.
+    """
+
     reports: list[DownloadRequest]
 
     model_config = {
         "json_schema_extra": {
             "examples": [
+                {"reports": [{"report_path": "/Custom/Finance/AR_Aging_Report.xdo"}]},
                 {
                     "reports": [
                         {"report_path": "/Custom/Finance/AR_Aging_Report.xdo"},
@@ -60,7 +68,7 @@ class BatchDownloadRequest(BaseModel):
                             "to_date": "31-03-2024",
                         },
                     ]
-                }
+                },
             ]
         }
     }

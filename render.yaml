@@ -2,7 +2,10 @@ services:
   - type: web
     name: bip-api
     runtime: python
-    buildCommand: pip install -e .
+    plan: free
+    rootDir: FastAPI-Service
+    healthCheckPath: /health
+    buildCommand: pip install .
     startCommand: uvicorn bip_api.main:app --host 0.0.0.0 --port $PORT
     envVars:
       # Oracle credentials — set in Render dashboard, not committed
@@ -36,9 +39,7 @@ services:
         value: "300"
       - key: FILE_AGE_THRESHOLD_HOURS
         value: "4.0"
-      - key: SCHEDULE_ENABLED
-        value: "false"
-      - key: SCHEDULE_INTERVAL_HOURS
-        value: "1.0"
+      - key: CORS_ORIGINS
+        value: "*"
       - key: DEBUG
         value: "false"
