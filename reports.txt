@@ -1,0 +1,4 @@
+# Add your Oracle BI Publisher report XDO paths here, one per line.
+# Lines starting with # are ignored.
+# Example:
+# /Custom/Finance/AR_Aging_Report.xdo
