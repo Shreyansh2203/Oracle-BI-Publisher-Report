@@ -47,8 +47,8 @@ def create_app() -> FastAPI:
         version=__version__,
         lifespan=lifespan,
         # Hide docs in production unless debug is on
-        docs_url="/docs" if settings.debug else None,
-        redoc_url="/redoc" if settings.debug else None,
+        docs_url="/docs",
+        redoc_url="/redoc",
     )
 
     origins = (
