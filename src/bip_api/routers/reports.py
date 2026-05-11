@@ -302,8 +302,21 @@ def _build_fused_invoices(record: ReceiptRecord) -> list[FusedInvoiceItem]:
     ]
 
 
-def _match_record(record: ReceiptRecord, csv_bytes: bytes) -> MatchedRecord:
-    rows = list(csv.DictReader(io.StringIO(csv_bytes.decode("utf-8"))))
+# Parsed-rows cache: avoids re-parsing the same CSV bytes on every request.
+# Keyed by filename (timestamped), so it auto-invalidates when a fresh report
+# is fetched from Oracle. Tuple of (filename, rows) — one entry max.
+_parsed_cache: tuple[str, list[dict]] | None = None
+
+
+def _get_parsed_rows(filename: str, csv_bytes: bytes) -> list[dict]:
+    global _parsed_cache
+    if _parsed_cache is None or _parsed_cache[0] != filename:
+        _parsed_cache = (filename, list(csv.DictReader(io.StringIO(csv_bytes.decode("utf-8")))))
+    return _parsed_cache[1]
+
+
+def _match_record(record: ReceiptRecord, filename: str, csv_bytes: bytes) -> MatchedRecord:
+    rows = _get_parsed_rows(filename, csv_bytes)
     fused_invoices = _build_fused_invoices(record)
 
     customer_rows = [
@@ -404,5 +417,5 @@ async def match_record(
     if isinstance(outcome, ReportError):
         raise HTTPException(status_code=502, detail=str(outcome))
 
-    matched = _match_record(record, outcome.csv_bytes)
+    matched = _match_record(record, outcome.filename, outcome.csv_bytes)
     return JSONResponse(content=matched.model_dump(by_alias=True, mode="json"))
