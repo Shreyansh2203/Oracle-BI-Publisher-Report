@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 _DATE_RE = re.compile(r"^\d{2}-\d{2}-\d{4}$")
 
@@ -10,8 +10,9 @@ _DATE_RE = re.compile(r"^\d{2}-\d{2}-\d{4}$")
 class DownloadRequest(BaseModel):
     report_path: str
     customer_name: str | None = None
-    from_date: str | None = None  # DD-MM-YYYY
-    to_date: str | None = None    # DD-MM-YYYY
+    from_date: str | None = None      # DD-MM-YYYY — passed to Oracle as P_FROM_DATE
+    to_date: str | None = None        # DD-MM-YYYY — passed to Oracle as P_TO_DATE
+    receipt_number: str | None = None  # post-filter: matched against RECEIPT_NUMBER column in CSV
 
     model_config = {
         "json_schema_extra": {
@@ -21,7 +22,11 @@ class DownloadRequest(BaseModel):
                     "customer_name": "Acme Corp",
                     "from_date": "01-01-2024",
                     "to_date": "31-03-2024",
-                }
+                },
+                {
+                    "report_path": "/Custom/Finacials/Receivables/Receipt Details Report.xdo",
+                    "receipt_number": "18-19/Jan/JV0899",
+                },
             ]
         }
     }
@@ -42,6 +47,8 @@ class DownloadRequest(BaseModel):
 
     @property
     def has_filters(self) -> bool:
+        # Only Oracle-level filters — receipt_number is a Python post-filter and
+        # does not prevent GitHub caching of the full report.
         return bool(self.customer_name or self.from_date or self.to_date)
 
 
@@ -86,3 +93,57 @@ class ReportListResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     version: str
+
+
+# --- Match endpoint models ---
+
+class InvoiceItem(BaseModel):
+    invoice_number: str
+    invoice_date: str | None = None
+    invoice_amount: float | None = None
+    description: str | None = None
+    customer_invoice_number: str | None = None
+    storeNo: str | None = None
+
+
+class ReceiptRecord(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    customer_name: str
+    payment_reference: str | None = None
+    payment_date: str | None = None  # YYYY/MM/DD
+    total_amount: float | None = None
+    invoices: list[InvoiceItem] = []
+    confidence_score: float | None = None
+    confidence_label: str | None = None
+    invoice_count: int | None = None
+    meta: dict | None = Field(None, alias="_meta")
+
+
+class FusedInvoiceItem(BaseModel):
+    invoice_number: str
+    fusion_invoice_number: str | None = None
+    invoice_date: str | None = None
+    fusion_invoice_date: str | None = None
+    invoice_amount: float | None = None
+    fusion_invoice_amount: float | None = None
+    description: str | None = None
+    customer_invoice_number: str | None = None
+    storeNo: str | None = None
+
+
+class MatchedRecord(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    customer_name: str
+    fusion_customer_name: str | None = None
+    payment_reference: str | None = None
+    fusion_receipt_number: str | None = None
+    payment_date: str | None = None
+    fusion_receipt_date: str | None = None
+    invoices: list[FusedInvoiceItem] = []
+    total_amount: float | None = None
+    confidence_score: float | None = None
+    confidence_label: str | None = None
+    invoice_count: int | None = None
+    meta: dict | None = Field(None, alias="_meta")

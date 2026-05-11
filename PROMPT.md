@@ -51,6 +51,7 @@ FastAPI-Service/
 | `GITHUB_BRANCH` | no | `main` | Branch to commit to |
 | `GITHUB_REPORTS_DIR` | no | `reports` | Directory inside the repo |
 | `FILE_AGE_THRESHOLD_HOURS` | no | `4.0` | Skip Oracle if a GitHub file for this report is younger than this |
+| `RECEIPT_REPORT_PATH` | no | `""` | XDO path for the Receipt Details Report — required for `POST /reports/match` |
 | `CORS_ORIGINS` | no | `*` | Comma-separated list of allowed origins, or `*` for any |
 
 ---
@@ -62,6 +63,39 @@ Returns `{"status": "ok", "version": "0.1.0"}`.
 
 ### `GET /reports`
 Lists all reports configured in `reports.txt`.
+
+### `POST /reports/match`
+Match a list of JSON payment records against the Receipt Details Report. The report
+is fetched via the same 3-tier cache as `/download` — if the cached copy is younger
+than `FILE_AGE_THRESHOLD_HOURS`, Oracle is not re-queried. Requires `RECEIPT_REPORT_PATH`
+to be set in the environment.
+
+**Body** — a single record (same structure as the PDF extraction output):
+```json
+{
+  "customer_name": "New Horizon Foods",
+  "payment_reference": "RECEIPT003",
+  "payment_date": "2026/05/10",
+  "total_amount": 451.2,
+  "invoices": [ { "invoice_number": "...", ... } ],
+  "confidence_score": 0.83,
+  "confidence_label": "HIGH",
+  "invoice_count": 1,
+  "_meta": { "filename": "...", ... }
+}
+```
+
+**Response** — same structure enriched with `fusion_*` fields from the matched CSV row:
+- `fusion_customer_name`, `fusion_receipt_number`, `fusion_receipt_date` (top-level, from CSV)
+- Per invoice: `fusion_invoice_number`, `fusion_invoice_date`, `fusion_invoice_amount` (echoed from input — CSV has no invoice-level rows)
+- All `fusion_*` fields are `null` when no match is found.
+- `_meta` is passed through from input unchanged.
+
+**Match priority:**
+1. `payment_reference` present → match `RECEIPT_NUMBER` + `BILL_CUSTOMER_NAME`
+2. `payment_reference` null → match `BILL_CUSTOMER_NAME` + `RECEIPT_DATE` + `RECEIPT_AMOUNT` (picks the row only when exactly one matches)
+
+---
 
 ### `POST /reports/download`
 Downloads one or more reports. The body is **always** a list — single or

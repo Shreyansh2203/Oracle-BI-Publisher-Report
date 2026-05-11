@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     # File-age check: skip Oracle if a GitHub file is younger than this threshold
     file_age_threshold_hours: float = 4.0
 
+    # XDO path for the Receipt Details Report — used by POST /reports/match.
+    # Leave empty to disable that endpoint.
+    receipt_report_path: str = ""
+
     # Comma-separated origins for CORS, or "*" for any.
     # MUST be tightened before production (e.g. "https://reports.example.com").
     # Leaving this as "*" allows any website to call the API from a browser.
