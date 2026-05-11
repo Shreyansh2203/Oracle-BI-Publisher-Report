@@ -26,8 +26,9 @@ class Settings(BaseSettings):
     # File-age check: skip Oracle if a GitHub file is younger than this threshold
     file_age_threshold_hours: float = 4.0
 
-    # Comma-separated origins for CORS, or "*" for any. Tighten in production
-    # (e.g. "https://reports.example.com,https://dashboards.example.com").
+    # Comma-separated origins for CORS, or "*" for any.
+    # MUST be tightened before production (e.g. "https://reports.example.com").
+    # Leaving this as "*" allows any website to call the API from a browser.
     cors_origins: str = "*"
 
     debug: bool = False

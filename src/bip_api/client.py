@@ -32,21 +32,21 @@ def _build_envelope(req: DownloadRequest, username: str, password: str) -> str:
     if req.customer_name:
         params += (
             f"<pub:item>"
-            f"<pub:name>p_customer_name</pub:name>"
+            f"<pub:name>P_CUSTOMER_NAME</pub:name>"
             f"<pub:values><pub:item>{xml_escape(req.customer_name)}</pub:item></pub:values>"
             f"</pub:item>"
         )
     if req.from_date:
         params += (
             f"<pub:item>"
-            f"<pub:name>p_from_date</pub:name>"
+            f"<pub:name>P_FROM_DATE</pub:name>"
             f"<pub:values><pub:item>{xml_escape(req.from_date)}</pub:item></pub:values>"
             f"</pub:item>"
         )
     if req.to_date:
         params += (
             f"<pub:item>"
-            f"<pub:name>p_to_date</pub:name>"
+            f"<pub:name>P_TO_DATE</pub:name>"
             f"<pub:values><pub:item>{xml_escape(req.to_date)}</pub:item></pub:values>"
             f"</pub:item>"
         )

@@ -15,4 +15,4 @@ COPY reports.txt .
 EXPOSE 8000
 
 # Single worker by default; scale horizontally via container replicas, not workers.
-CMD ["uvicorn", "bip_api.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+CMD ["sh", "-c", "uvicorn bip_api.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1"]

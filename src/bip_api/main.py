@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 import uuid
 from collections.abc import AsyncGenerator
@@ -97,7 +98,7 @@ def run() -> None:
     uvicorn.run(
         "bip_api.main:app",
         host="0.0.0.0",
-        port=8000,
+        port=int(os.getenv("PORT", "8000")),
         reload=settings.debug,
         log_level="debug" if settings.debug else "info",
     )

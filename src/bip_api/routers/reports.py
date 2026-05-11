@@ -41,45 +41,46 @@ def _get_cache(request: Request) -> ReportCache | None:
     return request.app.state.report_cache  # type: ignore[no-any-return]
 
 
-async def _fetch(
+def _check_memory_cache(
+    item: DownloadRequest,
+    cache: ReportCache | None,
+) -> _FetchResult | None:
+    if not cache:
+        return None
+    hit = cache.get(item)
+    if hit:
+        log.info("Memory cache hit: %s", item.report_path)
+        return _FetchResult(*hit, commit_to_github=False)
+    return None
+
+
+async def _check_github_cache(
+    item: DownloadRequest,
+    settings: Settings,
+    session: requests.Session,
+    cache: ReportCache | None,
+) -> _FetchResult | None:
+    # Filtered requests bypass GitHub — a filtered result must not overwrite
+    # the full-dataset file that unfiltered callers depend on.
+    if item.has_filters:
+        return None
+    stem = report_stem(item.report_path)
+    github_hit = await asyncio.to_thread(
+        get_latest_report_from_github, stem, settings, session
+    )
+    if not github_hit:
+        return None
+    if cache:
+        cache.set(item, *github_hit)
+    return _FetchResult(*github_hit, commit_to_github=False)
+
+
+async def _fetch_from_oracle(
     item: DownloadRequest,
     settings: Settings,
     session: requests.Session,
     cache: ReportCache | None,
 ) -> _FetchResult | AuthError | ReportError:
-    """
-    Fetch one report; return _FetchResult or exception as a value (never raises).
-
-    Priority order:
-      1. In-memory cache       → commit_to_github=False  (cache key is filter-aware)
-      2. GitHub file-age check → commit_to_github=False  (only when no filters — see below)
-      3. Oracle SOAP fetch     → commit_to_github=True   (only when no filters)
-
-    GitHub stores files keyed on report stem alone, with no encoding of
-    customer_name / from_date / to_date. Filtered requests therefore bypass
-    GitHub entirely on both read and write — otherwise a filtered fetch
-    would poison the cache and serve wrong data to unfiltered callers.
-    """
-    # 1. In-memory cache (filter-aware)
-    if cache:
-        hit = cache.get(item)
-        if hit:
-            log.info("Cache hit: %s", item.report_path)
-            return _FetchResult(*hit, commit_to_github=False)
-
-    # 2. GitHub file-age check — only safe for unfiltered requests.
-    if not item.has_filters:
-        stem = report_stem(item.report_path)
-        github_hit = await asyncio.to_thread(
-            get_latest_report_from_github, stem, settings, session
-        )
-        if github_hit:
-            if cache:
-                cache.set(item, *github_hit)
-            return _FetchResult(*github_hit, commit_to_github=False)
-
-    # 3. Fetch from Oracle. Only commit unfiltered fetches to GitHub —
-    # filtered output is per-request, not a shared resource.
     try:
         result = await asyncio.to_thread(fetch_report_csv, item, settings, session)
         if cache:
@@ -89,6 +90,26 @@ async def _fetch(
         return exc
     except ReportError as exc:
         return exc
+
+
+async def _fetch(
+    item: DownloadRequest,
+    settings: Settings,
+    session: requests.Session,
+    cache: ReportCache | None,
+) -> _FetchResult | AuthError | ReportError:
+    """
+    Fetch one report; return _FetchResult or exception as a value (never raises).
+
+    Priority: memory cache → GitHub cache → Oracle SOAP fetch.
+    Filtered requests skip GitHub on both read and write to avoid poisoning
+    the full-dataset cache served to unfiltered callers.
+    """
+    if result := _check_memory_cache(item, cache):
+        return result
+    if result := await _check_github_cache(item, settings, session, cache):
+        return result
+    return await _fetch_from_oracle(item, settings, session, cache)
 
 
 @router.get("", response_model=ReportListResponse)

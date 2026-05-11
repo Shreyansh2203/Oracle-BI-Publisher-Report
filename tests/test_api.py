@@ -260,3 +260,49 @@ def test_unfiltered_request_uses_github_cache(
     mock_fetch.assert_not_called()
 
 
+@patch("bip_api.routers.reports.commit_report")
+@patch("bip_api.routers.reports.get_latest_report_from_github")
+@patch("bip_api.routers.reports.fetch_report_csv")
+def test_fresh_oracle_fetch_triggers_github_commit(
+    mock_fetch: MagicMock,
+    mock_github: MagicMock,
+    mock_commit: MagicMock,
+    client: TestClient,
+) -> None:
+    """When GitHub has no fresh file, Oracle is fetched and a GitHub commit is scheduled."""
+    mock_github.return_value = None
+    mock_fetch.return_value = ("AR_Report.csv", CSV_BYTES)
+
+    resp = client.post("/reports/download", json=_single_body())
+
+    assert resp.status_code == 200
+    mock_fetch.assert_called_once()
+    mock_commit.assert_called_once()
+
+
+@patch("bip_api.routers.reports.fetch_report_csv")
+def test_download_batch_partial_failure_returns_zip_with_headers(
+    mock_fetch: MagicMock, client: TestClient
+) -> None:
+    """If one report in a batch fails, successful ones are returned in ZIP with count headers."""
+    mock_fetch.side_effect = [
+        ("AR_Report.csv", CSV_BYTES),
+        ReportError("not found"),
+    ]
+    resp = client.post(
+        "/reports/download",
+        json={
+            "reports": [
+                {"report_path": FAKE_REPORT_PATH},
+                {"report_path": "/Custom/Finance/AP_Report.xdo"},
+            ]
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.headers["x-succeeded-count"] == "1"
+    assert resp.headers["x-failed-count"] == "1"
+    with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+        assert zf.namelist() == ["AR_Report.csv"]
+        assert zf.read("AR_Report.csv") == CSV_BYTES
+
+
