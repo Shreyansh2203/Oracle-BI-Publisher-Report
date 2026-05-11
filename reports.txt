@@ -2,4 +2,4 @@
 # Lines starting with # are ignored.
 # Example:
 # /Custom/Finacials/Receivable Transactions/Invoice Details Report.xdo
-#/Custom/Finacials/Receivables/Receipt Details Report.xdo
+/Custom/Finacials/Receivables/Receipt Details Report.xdo

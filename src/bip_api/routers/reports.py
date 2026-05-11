@@ -388,10 +388,15 @@ async def match_record(
 
     fusion_* fields are null when no match is found.
     """
-    if not settings.receipt_report_path:
-        raise HTTPException(status_code=500, detail="RECEIPT_REPORT_PATH is not configured")
+    paths = settings.load_report_paths()
+    receipt_path = next(
+        (p for p in paths if "receipt" in p.lower()),
+        paths[0] if paths else None,
+    )
+    if not receipt_path:
+        raise HTTPException(status_code=500, detail="No report path configured in reports.txt")
 
-    download_item = DownloadRequest(report_path=settings.receipt_report_path)
+    download_item = DownloadRequest(report_path=receipt_path)
     outcome = await _fetch(download_item, settings, session, cache)
 
     if isinstance(outcome, AuthError):

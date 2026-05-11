@@ -51,7 +51,6 @@ FastAPI-Service/
 | `GITHUB_BRANCH` | no | `main` | Branch to commit to |
 | `GITHUB_REPORTS_DIR` | no | `reports` | Directory inside the repo |
 | `FILE_AGE_THRESHOLD_HOURS` | no | `4.0` | Skip Oracle if a GitHub file for this report is younger than this |
-| `RECEIPT_REPORT_PATH` | no | `""` | XDO path for the Receipt Details Report — required for `POST /reports/match` |
 | `CORS_ORIGINS` | no | `*` | Comma-separated list of allowed origins, or `*` for any |
 
 ---
