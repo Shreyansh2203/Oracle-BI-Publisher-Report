@@ -3,7 +3,6 @@ services:
     name: bip-api
     runtime: python
     plan: free
-    rootDir: FastAPI-Service
     healthCheckPath: /health
     buildCommand: pip install .
     startCommand: uvicorn bip_api.main:app --host 0.0.0.0 --port $PORT
