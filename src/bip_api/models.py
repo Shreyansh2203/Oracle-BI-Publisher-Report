@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import re
+from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-
-_DATE_RE = re.compile(r"^\d{2}-\d{2}-\d{4}$")
 
 
 class DownloadRequest(BaseModel):
@@ -41,8 +39,11 @@ class DownloadRequest(BaseModel):
     @field_validator("from_date", "to_date", mode="before")
     @classmethod
     def validate_date_format(cls, v: str | None) -> str | None:
-        if v is not None and not _DATE_RE.match(v):
-            raise ValueError("Date must be in DD-MM-YYYY format")
+        if v is not None:
+            try:
+                datetime.strptime(v, "%d-%m-%Y")
+            except ValueError:
+                raise ValueError("Date must be in DD-MM-YYYY format (e.g. 31-01-2024)")
         return v
 
     @property

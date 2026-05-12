@@ -1,4 +1,4 @@
-.PHONY: install dev lint format typecheck test all
+.PHONY: install dev lint format typecheck test all docker-run
 
 install:
 	uv pip install -e ".[dev]"
@@ -19,3 +19,7 @@ test:
 	pytest -v
 
 all: lint typecheck test
+
+# Run the Docker image with env vars from .env (use docker-compose for full stack).
+docker-run:
+	docker run --rm -p 8000:8000 --env-file .env bip-api

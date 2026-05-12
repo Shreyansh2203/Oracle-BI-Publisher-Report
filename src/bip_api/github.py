@@ -4,7 +4,7 @@ import base64
 import logging
 import re
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import requests
 
@@ -44,12 +44,11 @@ def get_latest_report_from_github(
         log.warning("GitHub dir listing failed: %s", resp.status_code)
         return None
 
-    prefix = stem + "_"
+    file_re = re.compile(rf"^{re.escape(stem)}_\d{{8}}_\d{{6}}\.csv$")
     matches = [
         f for f in resp.json()
         if isinstance(f, dict)
-        and f.get("name", "").startswith(prefix)
-        and f["name"].endswith(".csv")
+        and file_re.match(f.get("name", ""))
     ]
     if not matches:
         return None
@@ -63,12 +62,12 @@ def get_latest_report_from_github(
         return None
     try:
         file_dt = datetime.strptime(ts_match.group(1), "%Y%m%d_%H%M%S").replace(
-            tzinfo=timezone.utc
+            tzinfo=UTC
         )
     except ValueError:
         return None
 
-    age_hours = (datetime.now(timezone.utc) - file_dt).total_seconds() / 3600
+    age_hours = (datetime.now(UTC) - file_dt).total_seconds() / 3600
     if age_hours >= settings.file_age_threshold_hours:
         log.info(
             "GitHub file %s is stale (%.1fh >= %.1fh threshold) — will refresh",
@@ -93,6 +92,43 @@ def get_latest_report_from_github(
     return filename, dl.content
 
 
+def _cleanup_old_reports(
+    stem: str,
+    new_filename: str,
+    settings: Settings,
+    session: requests.Session,
+    headers: dict[str, str],
+) -> None:
+    """Delete all timestamped CSVs for this stem except the one just committed."""
+    dir_url = f"{_API_BASE}/repos/{settings.github_repo}/contents/{settings.github_reports_dir}"
+    resp = session.get(dir_url, headers=headers, timeout=15)
+    if not resp.ok:
+        log.warning("GitHub dir listing for cleanup failed: %s", resp.status_code)
+        return
+
+    for f in resp.json():
+        if not isinstance(f, dict):
+            continue
+        name = f.get("name", "")
+        # Delete any file that starts with the stem and ends with .csv, except the newly committed one
+        if name == new_filename or not name.startswith(stem) or not name.endswith(".csv"):
+            continue
+        sha = f.get("sha")
+        if not sha:
+            continue
+        del_url = f"{_API_BASE}/repos/{settings.github_repo}/contents/{settings.github_reports_dir}/{name}"
+        del_resp = session.delete(
+            del_url,
+            json={"message": f"report: remove stale {name}", "sha": sha, "branch": settings.github_branch},
+            headers=headers,
+            timeout=15,
+        )
+        if del_resp.ok:
+            log.info("Deleted stale report %s", name)
+        else:
+            log.warning("Failed to delete stale report %s: %s", name, del_resp.status_code)
+
+
 def commit_report(
     filename: str,
     csv_bytes: bytes,
@@ -115,7 +151,7 @@ def commit_report(
     # Optimistic PUT: filenames are timestamped so collisions are rare.
     # On 422 (file already exists), fetch SHA and retry once.
     # On transient 5xx, retry up to 2 more times with backoff (the session-level
-    # Retry adapter only covers POST; background tasks need explicit retry here).
+    # Retry adapter only covers GET; background tasks need explicit retry here).
     sha: str | None = None
     for attempt in range(3):
         payload: dict[str, str] = {
@@ -131,6 +167,8 @@ def commit_report(
         if resp.ok:
             commit_url = resp.json().get("commit", {}).get("html_url", "")
             log.info("Committed %s → %s", path, commit_url)
+            stem = _TS_RE.sub("", filename)
+            _cleanup_old_reports(stem, filename, settings, session, headers)
             return
 
         if resp.status_code == 422 and sha is None:

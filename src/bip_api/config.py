@@ -3,6 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import PrivateAttr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -10,6 +11,13 @@ class Settings(BaseSettings):
     oracle_username: str
     oracle_password: str
     oracle_base_url: str
+
+    @field_validator("oracle_base_url")
+    @classmethod
+    def _require_https(cls, v: str) -> str:
+        if not v.lower().startswith("https://"):
+            raise ValueError("oracle_base_url must use HTTPS to protect credentials in transit")
+        return v
     reports_file: Path = Path("reports.txt")
 
     max_batch_size: int = 20
@@ -42,8 +50,15 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
+    _paths_cache: list[str] | None = PrivateAttr(default=None)
+
     def load_report_paths(self) -> list[str]:
-        """Read XDO paths from reports_file; skip blanks and `#` comments."""
+        """Read XDO paths from reports_file; skip blanks and `#` comments. Result is cached."""
+        if self._paths_cache is None:
+            self._paths_cache = self._read_report_paths()
+        return self._paths_cache
+
+    def _read_report_paths(self) -> list[str]:
         if not self.reports_file.exists():
             return []
         return [

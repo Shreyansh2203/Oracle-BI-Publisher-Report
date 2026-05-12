@@ -21,6 +21,7 @@ from bip_api.github import commit_report, get_latest_report_from_github
 from bip_api.models import (
     DownloadRequest,
     FusedInvoiceItem,
+    InvoiceItem,
     MatchedRecord,
     ReceiptRecord,
     ReportItem,
@@ -43,8 +44,12 @@ class _FetchResult:
     source: Literal["memory", "github", "oracle"] = field(default="oracle")
 
 
-def _get_session(request: Request) -> requests.Session:
-    return request.app.state.http_session  # type: ignore[no-any-return]
+def _get_oracle_session(request: Request) -> requests.Session:
+    return request.app.state.oracle_session  # type: ignore[no-any-return]
+
+
+def _get_github_session(request: Request) -> requests.Session:
+    return request.app.state.github_session  # type: ignore[no-any-return]
 
 
 def _get_cache(request: Request) -> ReportCache | None:
@@ -61,7 +66,10 @@ def _filter_by_receipt_number(csv_bytes: bytes, receipt_number: str) -> bytes:
     reader = csv.DictReader(io.StringIO(text))
     if reader.fieldnames is None:
         return csv_bytes
-    matching = [row for row in reader if row.get("RECEIPT_NUMBER", "") == receipt_number]
+    matching = [
+        row for row in reader
+        if row.get("RECEIPT_NUMBER", "").strip().lower() == receipt_number.strip().lower()
+    ]
     out = io.StringIO()
     writer = csv.DictWriter(out, fieldnames=reader.fieldnames)
     writer.writeheader()
@@ -84,12 +92,12 @@ async def _check_memory_cache(
 async def _check_github_cache(
     item: DownloadRequest,
     settings: Settings,
-    session: requests.Session,
+    github_session: requests.Session,
     cache: ReportCache | None,
 ) -> _FetchResult | None:
     stem = report_stem(item.report_path)
     github_hit = await asyncio.to_thread(
-        get_latest_report_from_github, stem, settings, session
+        get_latest_report_from_github, stem, settings, github_session
     )
     if github_hit:
         if cache:
@@ -101,11 +109,11 @@ async def _check_github_cache(
 async def _fetch_from_oracle(
     item: DownloadRequest,
     settings: Settings,
-    session: requests.Session,
+    oracle_session: requests.Session,
     cache: ReportCache | None,
 ) -> _FetchResult | AuthError | ReportError:
     try:
-        result = await asyncio.to_thread(fetch_report_csv, item, settings, session)
+        result = await asyncio.to_thread(fetch_report_csv, item, settings, oracle_session)
         if cache:
             cache.set(item, *result)
         return _FetchResult(*result, commit_to_github=not item.has_filters, source="oracle")
@@ -118,7 +126,8 @@ async def _fetch_from_oracle(
 async def _fetch(
     item: DownloadRequest,
     settings: Settings,
-    session: requests.Session,
+    oracle_session: requests.Session,
+    github_session: requests.Session,
     cache: ReportCache | None,
 ) -> _FetchResult | AuthError | ReportError:
     """
@@ -138,22 +147,22 @@ async def _fetch(
         return result
 
     if not item.has_filters:
-        result = await _check_github_cache(item, settings, session, cache)
+        result = await _check_github_cache(item, settings, github_session, cache)
         if result:
             return result
 
-    return await _fetch_from_oracle(item, settings, session, cache)
+    return await _fetch_from_oracle(item, settings, oracle_session, cache)
 
 
 def _schedule_github_commit(
     background_tasks: BackgroundTasks,
     outcome: _FetchResult,
     settings: Settings,
-    session: requests.Session,
+    github_session: requests.Session,
 ) -> None:
     if outcome.commit_to_github:
         background_tasks.add_task(
-            commit_report, outcome.filename, outcome.csv_bytes, settings, session
+            commit_report, outcome.filename, outcome.csv_bytes, settings, github_session
         )
 
 
@@ -186,7 +195,8 @@ async def download(
     req: ReportRequest,
     background_tasks: BackgroundTasks,
     settings: Settings = Depends(get_settings),
-    session: requests.Session = Depends(_get_session),
+    oracle_session: requests.Session = Depends(_get_oracle_session),
+    github_session: requests.Session = Depends(_get_github_session),
     cache: ReportCache | None = Depends(_get_cache),
 ) -> Response:
     """
@@ -207,7 +217,7 @@ async def download(
         )
 
     outcomes = await asyncio.gather(
-        *[_fetch(item, settings, session, cache) for item in req.reports]
+        *[_fetch(item, settings, oracle_session, github_session, cache) for item in req.reports]
     )
 
     # Single report → return raw CSV
@@ -219,14 +229,16 @@ async def download(
             raise HTTPException(status_code=502, detail=str(outcome))
 
         cache_source = outcome.source
-        _schedule_github_commit(background_tasks, outcome, settings, session)
+        _schedule_github_commit(background_tasks, outcome, settings, github_session)
         outcome = _apply_receipt_filter(outcome, req.reports[0].receipt_number)
+        
+        download_filename = f"{report_name(req.reports[0].report_path)}.csv"
 
         return Response(
             content=outcome.csv_bytes,
             media_type="text/csv",
             headers={
-                "Content-Disposition": f'attachment; filename="{outcome.filename}"',
+                "Content-Disposition": f'attachment; filename="{download_filename}"',
                 "Content-Length": str(len(outcome.csv_bytes)),
                 "X-Cache": cache_source,
             },
@@ -246,9 +258,11 @@ async def download(
                 fetch_errors.append(f"{item.report_path}: {outcome}")
             else:
                 zip_sources.append(outcome.source)
-                _schedule_github_commit(background_tasks, outcome, settings, session)
+                _schedule_github_commit(background_tasks, outcome, settings, github_session)
                 outcome = _apply_receipt_filter(outcome, item.receipt_number)
-                zf.writestr(outcome.filename, outcome.csv_bytes)
+                
+                download_filename = f"{report_name(item.report_path)}.csv"
+                zf.writestr(download_filename, outcome.csv_bytes)
                 success_count += 1
 
     if success_count == 0:
@@ -277,10 +291,11 @@ async def download(
 # Match helpers
 # ---------------------------------------------------------------------------
 
-# Invoice Details Report column names
-_INV_NUMBER_COL = "INVOICE_NUMBER"
-_INV_DATE_COL = "INVOICE_DATE"
-_INV_AMOUNT_COL = "INVOICE_AMOUNT"
+# Invoice Details Report column names (Oracle Fusion Receivables)
+_INV_NUMBER_COL = "TRANSACTION_NUMBER"   # Oracle internal transaction number → fusion_invoice_number
+_INV_DATE_COL = "TRANSACTION_DATE"       # → fusion_invoice_date
+_INV_AMOUNT_COL = "TOTAL_AMOUNTS"        # → fusion_invoice_amount
+_INV_DOC_NUMBER_COL = "DOCUMENT_NUMBER"  # customer-facing document number; used in Step 2
 
 
 def _parse_csv_amount(val: str) -> float | None:
@@ -291,9 +306,9 @@ def _parse_csv_amount(val: str) -> float | None:
 
 
 def _amounts_match(csv_val: str, expected: float | None) -> bool:
-    if expected is None:
-        return True
     parsed = _parse_csv_amount(csv_val)
+    if expected is None:
+        return parsed is None
     return parsed is not None and abs(parsed - expected) < 0.005
 
 
@@ -331,15 +346,15 @@ def _match_receipt(
     if record.payment_reference:
         hits = [
             r for r in rows
-            if r.get("RECEIPT_NUMBER", "").strip() == record.payment_reference.strip()
+            if r.get("RECEIPT_NUMBER", "").strip().lower() == record.payment_reference.strip().lower()
             and _amounts_match(r.get("RECEIPT_AMOUNT", ""), record.total_amount)
         ]
     else:
-        expected_date = _convert_json_date(record.payment_date)
+        expected_date = _convert_json_date(record.payment_date) or ""
         hits = [
             r for r in rows
             if r.get("BILL_CUSTOMER_NAME", "").strip().lower() == record.customer_name.strip().lower()
-            and (not expected_date or r.get("RECEIPT_DATE", "").strip() == expected_date)
+            and r.get("RECEIPT_DATE", "").strip() == expected_date
             and _amounts_match(r.get("RECEIPT_AMOUNT", ""), record.total_amount)
         ]
     return hits[0] if len(hits) == 1 else None
@@ -353,31 +368,31 @@ def _match_invoice_item(
     Run 3-step invoice matching for one invoice item. Stop at first step that
     yields exactly one hit; set fusion fields to null if no step matches.
 
-    Step 1: invoice_number + invoice_date (exact).
-    Step 2: customer_invoice_number == report invoice_number + invoice_date (exact).
-    Step 3: invoice_number is substring of report invoice_number + invoice_date (exact).
+    Step 1: input invoice_number == TRANSACTION_NUMBER + invoice_date (exact).
+    Step 2: input customer_invoice_number == DOCUMENT_NUMBER + invoice_date (exact).
+    Step 3: input invoice_number is substring of TRANSACTION_NUMBER + invoice_date (exact).
     """
-    inv_num = inv.invoice_number.strip()
-    inv_date = (inv.invoice_date or "").strip()
-    cust_inv_num = (inv.customer_invoice_number or "").strip()
+    inv_num = inv.invoice_number.strip().lower()
+    inv_date = (inv.invoice_date or "").strip().lower()
+    cust_inv_num = (inv.customer_invoice_number or "").strip().lower()
 
     matched_row: dict[str, str] | None = None
 
     # Step 1: exact invoice_number + invoice_date
     hits = [
         r for r in invoice_rows
-        if r.get(_INV_NUMBER_COL, "").strip() == inv_num
-        and r.get(_INV_DATE_COL, "").strip() == inv_date
+        if r.get(_INV_NUMBER_COL, "").strip().lower() == inv_num
+        and r.get(_INV_DATE_COL, "").strip().lower() == inv_date
     ]
     if len(hits) == 1:
         matched_row = hits[0]
 
-    # Step 2: customer_invoice_number == report invoice_number + invoice_date
+    # Step 2: input customer_invoice_number == report DOCUMENT_NUMBER + invoice_date
     if matched_row is None and cust_inv_num:
         hits = [
             r for r in invoice_rows
-            if r.get(_INV_NUMBER_COL, "").strip() == cust_inv_num
-            and r.get(_INV_DATE_COL, "").strip() == inv_date
+            if r.get(_INV_DOC_NUMBER_COL, "").strip().lower() == cust_inv_num
+            and r.get(_INV_DATE_COL, "").strip().lower() == inv_date
         ]
         if len(hits) == 1:
             matched_row = hits[0]
@@ -386,8 +401,8 @@ def _match_invoice_item(
     if matched_row is None and inv_num:
         hits = [
             r for r in invoice_rows
-            if inv_num in r.get(_INV_NUMBER_COL, "").strip()
-            and r.get(_INV_DATE_COL, "").strip() == inv_date
+            if inv_num in r.get(_INV_NUMBER_COL, "").strip().lower()
+            and r.get(_INV_DATE_COL, "").strip().lower() == inv_date
         ]
         if len(hits) == 1:
             matched_row = hits[0]
@@ -455,7 +470,8 @@ async def match_record(
     record: ReceiptRecord,
     background_tasks: BackgroundTasks,
     settings: Settings = Depends(get_settings),
-    session: requests.Session = Depends(_get_session),
+    oracle_session: requests.Session = Depends(_get_oracle_session),
+    github_session: requests.Session = Depends(_get_github_session),
     cache: ReportCache | None = Depends(_get_cache),
     parsed_cache: ParsedCSVCache = Depends(_get_parsed_csv_cache),
 ) -> JSONResponse:
@@ -496,10 +512,12 @@ async def match_record(
         (p for p in all_paths if "invoice" in p.lower() and p != receipt_path), None
     )
 
-    # Receipt first so outcomes[0] is always the receipt result.
-    fetch_paths = [receipt_path] + [p for p in all_paths if p != receipt_path]
+    # Fetch only the two reports this endpoint actually needs.
+    fetch_paths = [receipt_path] + ([invoice_path] if invoice_path else [])
     items = [DownloadRequest(report_path=p) for p in fetch_paths]
-    outcomes = await asyncio.gather(*[_fetch(item, settings, session, cache) for item in items])
+    outcomes = await asyncio.gather(
+        *[_fetch(item, settings, oracle_session, github_session, cache) for item in items]
+    )
 
     receipt_outcome = outcomes[0]
     if isinstance(receipt_outcome, AuthError):
@@ -509,8 +527,8 @@ async def match_record(
 
     # Resolve invoice outcome (non-fatal if missing or failed).
     invoice_outcome: _FetchResult | None = None
-    if invoice_path and invoice_path in fetch_paths:
-        inv_result = outcomes[fetch_paths.index(invoice_path)]
+    if invoice_path:
+        inv_result = outcomes[1]
         if isinstance(inv_result, (AuthError, ReportError)):
             log.warning("Failed to fetch invoice report %s: %s", invoice_path, inv_result)
         else:
@@ -519,7 +537,7 @@ async def match_record(
     # Schedule GitHub commits for freshly fetched reports.
     for outcome in outcomes:
         if not isinstance(outcome, (AuthError, ReportError)):
-            _schedule_github_commit(background_tasks, outcome, settings, session)
+            _schedule_github_commit(background_tasks, outcome, settings, github_session)
 
     matched = _match_record(
         record,

@@ -16,7 +16,7 @@ from bip_api.config import Settings, get_settings
 from bip_api.exceptions import AuthError, ReportError
 from bip_api.main import app
 from bip_api.models import DownloadRequest
-from bip_api.routers.reports import _get_session
+from bip_api.routers.reports import _get_github_session, _get_oracle_session
 
 FAKE_SETTINGS = Settings(
     oracle_username="testuser",
@@ -27,7 +27,8 @@ FAKE_SETTINGS = Settings(
 FAKE_SESSION = MagicMock(spec=requests.Session)
 
 app.dependency_overrides[get_settings] = lambda: FAKE_SETTINGS
-app.dependency_overrides[_get_session] = lambda: FAKE_SESSION
+app.dependency_overrides[_get_oracle_session] = lambda: FAKE_SESSION
+app.dependency_overrides[_get_github_session] = lambda: FAKE_SESSION
 
 
 CSV_BYTES = b"col1,col2\nval1,val2\n"
@@ -356,6 +357,49 @@ def test_x_cache_zip_uses_highest_cost_tier(mock_fetch: MagicMock, client: TestC
 
 
 # ---------------------------------------------------------------------------
+# GitHub cache unit tests
+# ---------------------------------------------------------------------------
+
+def test_github_cache_ignores_files_with_longer_stem() -> None:
+    """
+    If two reports share a stem prefix (e.g. "AR" and "AR_Aging"), a lookup for
+    "AR" must not return a file belonging to "AR_Aging".
+    """
+    from unittest.mock import MagicMock
+
+    from bip_api.github import get_latest_report_from_github
+
+    settings = Settings(
+        oracle_username="u",
+        oracle_password="p",
+        oracle_base_url="https://x.com",
+        github_token="tok",
+        github_repo="owner/repo",
+    )
+    session = MagicMock(spec=requests.Session)
+
+    dir_listing = MagicMock()
+    dir_listing.status_code = 200
+    dir_listing.ok = True
+    # Directory contains a file for the longer-stem report only.
+    dir_listing.json.return_value = [
+        {"name": "AR_Aging_20250101_120000.csv", "download_url": "https://example.com/file.csv"},
+    ]
+
+    file_resp = MagicMock()
+    file_resp.ok = True
+    file_resp.content = CSV_BYTES
+
+    session.get.side_effect = [dir_listing, file_resp]
+
+    result = get_latest_report_from_github("AR", settings, session)
+    # Must return None — "AR_Aging_*.csv" does not belong to stem "AR".
+    assert result is None
+    # The file download should never have been attempted.
+    assert session.get.call_count == 1
+
+
+# ---------------------------------------------------------------------------
 # ReportCache unit tests
 # ---------------------------------------------------------------------------
 
@@ -397,6 +441,19 @@ def test_cache_hit_returns_correct_data() -> None:
 
 
 @patch("bip_api.routers.reports.fetch_report_csv")
+def test_receipt_number_filter_case_insensitive(mock_fetch: MagicMock, client: TestClient) -> None:
+    """receipt_number filter must match case-insensitively and strip whitespace."""
+    csv_data = b"RECEIPT_NUMBER,NAME\r\nREC001 ,Acme Corp\r\n"
+    mock_fetch.return_value = ("Receipt.csv", csv_data)
+    resp = client.post(
+        "/reports/download",
+        json={"reports": [{"report_path": FAKE_REPORT_PATH, "receipt_number": "rec001"}]},
+    )
+    assert resp.status_code == 200
+    assert b"Acme Corp" in resp.content
+
+
+@patch("bip_api.routers.reports.fetch_report_csv")
 def test_download_non_utf8_csv_does_not_crash(mock_fetch: MagicMock, client: TestClient) -> None:
     """Non-UTF-8 bytes from Oracle must not raise UnicodeDecodeError."""
     # Latin-1 encoded em-dash (0x96) is invalid UTF-8.
@@ -433,7 +490,8 @@ MATCH_SETTINGS = Settings(
 @pytest.fixture()
 def match_client() -> TestClient:
     app.dependency_overrides[get_settings] = lambda: MATCH_SETTINGS
-    app.dependency_overrides[_get_session] = lambda: FAKE_SESSION
+    app.dependency_overrides[_get_oracle_session] = lambda: FAKE_SESSION
+    app.dependency_overrides[_get_github_session] = lambda: FAKE_SESSION
     with TestClient(app) as c:
         yield c
     app.dependency_overrides[get_settings] = lambda: FAKE_SETTINGS
@@ -542,10 +600,10 @@ def test_match_ambiguous_returns_nulls(mock_fetch: MagicMock, match_client: Test
 # ---------------------------------------------------------------------------
 
 INVOICE_CSV = (
-    "INVOICE_NUMBER,INVOICE_DATE,INVOICE_AMOUNT\n"
-    "INV-001,15-01-2024,500.00\n"
-    "126125908454,20-01-2024,750.00\n"  # contains "25908454" as substring
-    "6153004273089,22-01-2024,300.00\n"  # contains "6153004273" as substring
+    "TRANSACTION_NUMBER,TRANSACTION_DATE,TOTAL_AMOUNTS,DOCUMENT_NUMBER\n"
+    "INV-001,15-01-2024,500.00,INV-001\n"           # DOCUMENT_NUMBER matches for Step 2 tests
+    "126125908454,20-01-2024,750.00,DOC-002\n"       # TRANSACTION_NUMBER contains "25908454" (Step 3)
+    "6153004273089,22-01-2024,300.00,DOC-003\n"      # TRANSACTION_NUMBER contains "6153004273" (Step 3)
 )
 
 MATCH_WITH_INVOICE_SETTINGS = Settings(
@@ -573,7 +631,8 @@ def invoice_match_client(tmp_path: Path) -> TestClient:
         reports_file=reports_file,
     )
     app.dependency_overrides[get_settings] = lambda: settings
-    app.dependency_overrides[_get_session] = lambda: FAKE_SESSION
+    app.dependency_overrides[_get_oracle_session] = lambda: FAKE_SESSION
+    app.dependency_overrides[_get_github_session] = lambda: FAKE_SESSION
     with TestClient(app) as c:
         yield c
     app.dependency_overrides[get_settings] = lambda: FAKE_SETTINGS
@@ -658,9 +717,9 @@ def test_invoice_match_step3_substring(mock_fetch: MagicMock, invoice_match_clie
 def test_invoice_match_ambiguous_returns_nulls(mock_fetch: MagicMock, invoice_match_client: TestClient) -> None:
     """Invoice Step 3 with two substring matches → fusion fields null."""
     ambiguous_inv_csv = (
-        "INVOICE_NUMBER,INVOICE_DATE,INVOICE_AMOUNT\n"
-        "126125908454,20-01-2024,750.00\n"
-        "999125908454,20-01-2024,200.00\n"  # also contains "25908454"
+        "TRANSACTION_NUMBER,TRANSACTION_DATE,TOTAL_AMOUNTS,DOCUMENT_NUMBER\n"
+        "126125908454,20-01-2024,750.00,DOC-A\n"
+        "999125908454,20-01-2024,200.00,DOC-B\n"  # also contains "25908454"
     )
     mock_fetch.side_effect = [
         ("Receipt_Details_20240115_120000.csv", RECEIPT_CSV.encode()),
@@ -706,6 +765,125 @@ def test_invoice_match_no_invoice_report_returns_null_fusion(
     assert inv["fusion_invoice_number"] is None
     assert inv["fusion_invoice_date"] is None
     assert inv["fusion_invoice_amount"] is None
+
+
+@patch("bip_api.routers.reports.fetch_report_csv")
+def test_match_receipt_number_case_insensitive(mock_fetch: MagicMock, match_client: TestClient) -> None:
+    """payment_reference match is case-insensitive per general conventions."""
+    mock_fetch.return_value = ("Receipt_Details_20240115_150000.csv", RECEIPT_CSV.encode())
+    resp = match_client.post(
+        "/reports/match",
+        json={
+            "customer_name": "Acme Corp",
+            "payment_reference": "rec001",  # lowercase — CSV has "REC001"
+            "total_amount": 1000.0,
+            "invoices": [],
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["fusion_receipt_number"] == "REC001"
+
+
+@patch("bip_api.routers.reports.fetch_report_csv")
+def test_invoice_match_step1_case_insensitive(mock_fetch: MagicMock, invoice_match_client: TestClient) -> None:
+    """Invoice Step 1: invoice_number match is case-insensitive."""
+    mock_fetch.side_effect = [
+        ("Receipt_Details_20240115_120000.csv", RECEIPT_CSV.encode()),
+        ("Invoice_Details_20240115_120010.csv", INVOICE_CSV.encode()),
+    ]
+    resp = invoice_match_client.post(
+        "/reports/match",
+        json={
+            "customer_name": "Acme Corp",
+            "payment_reference": "REC001",
+            "total_amount": 1000.0,
+            "invoices": [
+                {"invoice_number": "inv-001", "invoice_date": "15-01-2024"}  # lowercase
+            ],
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["invoices"][0]["fusion_invoice_number"] == "INV-001"
+
+
+@patch("bip_api.routers.reports.fetch_report_csv")
+def test_invoice_match_step2_case_insensitive(mock_fetch: MagicMock, invoice_match_client: TestClient) -> None:
+    """Invoice Step 2: customer_invoice_number match is case-insensitive."""
+    mock_fetch.side_effect = [
+        ("Receipt_Details_20240115_120000.csv", RECEIPT_CSV.encode()),
+        ("Invoice_Details_20240115_120011.csv", INVOICE_CSV.encode()),
+    ]
+    resp = invoice_match_client.post(
+        "/reports/match",
+        json={
+            "customer_name": "Acme Corp",
+            "payment_reference": "REC001",
+            "total_amount": 1000.0,
+            "invoices": [
+                {
+                    "invoice_number": "NOMATCH",
+                    "customer_invoice_number": "inv-001",  # lowercase — CSV has "INV-001"
+                    "invoice_date": "15-01-2024",
+                }
+            ],
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["invoices"][0]["fusion_invoice_number"] == "INV-001"
+
+
+@patch("bip_api.routers.reports.fetch_report_csv")
+def test_invoice_match_step3_substring_case_insensitive(mock_fetch: MagicMock, invoice_match_client: TestClient) -> None:
+    """Invoice Step 3: substring match is case-insensitive."""
+    upper_inv_csv = (
+        "TRANSACTION_NUMBER,TRANSACTION_DATE,TOTAL_AMOUNTS,DOCUMENT_NUMBER\n"
+        "ABCDEF123456,20-01-2024,750.00,DOC-001\n"
+    )
+    mock_fetch.side_effect = [
+        ("Receipt_Details_20240115_120000.csv", RECEIPT_CSV.encode()),
+        ("Invoice_Details_20240115_120012.csv", upper_inv_csv.encode()),
+    ]
+    resp = invoice_match_client.post(
+        "/reports/match",
+        json={
+            "customer_name": "Acme Corp",
+            "payment_reference": "REC001",
+            "total_amount": 1000.0,
+            "invoices": [
+                {"invoice_number": "def123", "invoice_date": "20-01-2024"}  # lowercase substring
+            ],
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["invoices"][0]["fusion_invoice_number"] == "ABCDEF123456"
+
+
+# ---------------------------------------------------------------------------
+# Fix 2: report_stem sanitization
+# ---------------------------------------------------------------------------
+
+def test_report_stem_strips_unsafe_characters() -> None:
+    """report_stem must strip characters that are unsafe in Content-Disposition filenames."""
+    from bip_api.client import report_stem
+    assert report_stem('/Custom/Finance/AR"; evil=true.xdo') == "AR_eviltrue"
+    assert report_stem('/Custom/Finance/Normal Report.xdo') == "Normal_Report"
+    assert report_stem('/Custom/Finance/Report-2024.xdo') == "Report-2024"
+
+
+# ---------------------------------------------------------------------------
+# Fix 3: calendar-valid date validation
+# ---------------------------------------------------------------------------
+
+def test_invalid_calendar_date_rejected() -> None:
+    """Dates that pass the format regex but are not real calendar dates must be rejected."""
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError, match="DD-MM-YYYY"):
+        DownloadRequest(report_path="/x.xdo", from_date="31-02-2024")
+
+
+def test_valid_date_accepted() -> None:
+    req = DownloadRequest(report_path="/x.xdo", from_date="29-02-2024")  # 2024 is a leap year
+    assert req.from_date == "29-02-2024"
 
 
 def test_match_no_receipt_path_configured(client: TestClient, tmp_path: Path) -> None:

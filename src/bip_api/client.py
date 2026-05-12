@@ -4,7 +4,7 @@ import base64
 import logging
 import re
 import textwrap
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from xml.sax.saxutils import escape as xml_escape
 
 import requests
@@ -76,13 +76,14 @@ def _build_envelope(req: DownloadRequest, username: str, password: str) -> str:
     """)
 
 
-def make_session(pool_size: int = 10) -> requests.Session:
+def make_oracle_session(pool_size: int = 10) -> requests.Session:
+    """Session for Oracle BIP SOAP calls. Retries only POST (SOAP) on transient errors."""
     session = requests.Session()
     retry = Retry(
         total=3,
         backoff_factor=1,
         status_forcelist=[502, 503, 504],
-        allowed_methods=frozenset(["GET", "POST", "PUT"]),
+        allowed_methods=frozenset(["POST"]),
     )
     adapter = HTTPAdapter(
         max_retries=retry,
@@ -94,6 +95,24 @@ def make_session(pool_size: int = 10) -> requests.Session:
     return session
 
 
+def make_github_session(pool_size: int = 10) -> requests.Session:
+    """Session for GitHub API calls. Retries only GET; PUT/DELETE are retried manually."""
+    session = requests.Session()
+    retry = Retry(
+        total=2,
+        backoff_factor=0.5,
+        status_forcelist=[502, 503, 504],
+        allowed_methods=frozenset(["GET"]),
+    )
+    adapter = HTTPAdapter(
+        max_retries=retry,
+        pool_connections=pool_size,
+        pool_maxsize=pool_size,
+    )
+    session.mount("https://", adapter)
+    return session
+
+
 def report_name(report_path: str) -> str:
     """Return the human-readable report name (basename without .xdo)."""
     return report_path.rstrip("/").rsplit("/", 1)[-1].removesuffix(".xdo")
@@ -101,7 +120,9 @@ def report_name(report_path: str) -> str:
 
 def report_stem(report_path: str) -> str:
     """Return the filesystem-safe stem used in saved CSV filenames."""
-    return report_name(report_path).replace(" ", "_")
+    raw = report_name(report_path).replace(" ", "_")
+    # Strip characters that are unsafe in Content-Disposition filenames or shell paths.
+    return re.sub(r"[^\w\-]", "", raw)
 
 
 def fetch_report_csv(
@@ -155,7 +176,7 @@ def fetch_report_csv(
     csv_bytes = base64.b64decode(bytes_match.group(1))
 
     stem = report_stem(req.report_path)
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
     filename = f"{stem}_{timestamp}.csv"
     log.info("Fetched %s (%d bytes)", filename, len(csv_bytes))
     return filename, csv_bytes
