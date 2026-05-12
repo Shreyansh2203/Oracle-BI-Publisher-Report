@@ -306,9 +306,9 @@ def _parse_csv_amount(val: str) -> float | None:
 
 
 def _amounts_match(csv_val: str, expected: float | None) -> bool:
-    parsed = _parse_csv_amount(csv_val)
     if expected is None:
-        return parsed is None
+        return True
+    parsed = _parse_csv_amount(csv_val)
     return parsed is not None and abs(parsed - expected) < 0.005
 
 
@@ -350,11 +350,11 @@ def _match_receipt(
             and _amounts_match(r.get("RECEIPT_AMOUNT", ""), record.total_amount)
         ]
     else:
-        expected_date = _convert_json_date(record.payment_date) or ""
+        expected_date = _convert_json_date(record.payment_date)
         hits = [
             r for r in rows
             if r.get("BILL_CUSTOMER_NAME", "").strip().lower() == record.customer_name.strip().lower()
-            and r.get("RECEIPT_DATE", "").strip() == expected_date
+            and (not expected_date or r.get("RECEIPT_DATE", "").strip() == expected_date)
             and _amounts_match(r.get("RECEIPT_AMOUNT", ""), record.total_amount)
         ]
     return hits[0] if len(hits) == 1 else None
@@ -382,7 +382,7 @@ def _match_invoice_item(
     hits = [
         r for r in invoice_rows
         if r.get(_INV_NUMBER_COL, "").strip().lower() == inv_num
-        and r.get(_INV_DATE_COL, "").strip().lower() == inv_date
+        and (not inv_date or r.get(_INV_DATE_COL, "").strip().lower() == inv_date)
     ]
     if len(hits) == 1:
         matched_row = hits[0]
@@ -392,7 +392,7 @@ def _match_invoice_item(
         hits = [
             r for r in invoice_rows
             if r.get(_INV_DOC_NUMBER_COL, "").strip().lower() == cust_inv_num
-            and r.get(_INV_DATE_COL, "").strip().lower() == inv_date
+            and (not inv_date or r.get(_INV_DATE_COL, "").strip().lower() == inv_date)
         ]
         if len(hits) == 1:
             matched_row = hits[0]
@@ -402,7 +402,7 @@ def _match_invoice_item(
         hits = [
             r for r in invoice_rows
             if inv_num in r.get(_INV_NUMBER_COL, "").strip().lower()
-            and r.get(_INV_DATE_COL, "").strip().lower() == inv_date
+            and (not inv_date or r.get(_INV_DATE_COL, "").strip().lower() == inv_date)
         ]
         if len(hits) == 1:
             matched_row = hits[0]
