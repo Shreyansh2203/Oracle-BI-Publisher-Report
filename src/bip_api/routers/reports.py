@@ -373,7 +373,8 @@ def _match_invoice_item(
     Step 3: input invoice_number is substring of TRANSACTION_NUMBER + invoice_date (exact).
     """
     inv_num = inv.invoice_number.strip().lower()
-    inv_date = (inv.invoice_date or "").strip().lower()
+    converted_date = _convert_json_date(inv.invoice_date)
+    inv_date = (converted_date or "").strip().lower()
     cust_inv_num = (inv.customer_invoice_number or "").strip().lower()
 
     matched_row: dict[str, str] | None = None
