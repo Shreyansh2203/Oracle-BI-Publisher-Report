@@ -4,7 +4,7 @@ import base64
 import logging
 import re
 import textwrap
-from datetime import datetime
+from datetime import datetime, timezone
 from xml.sax.saxutils import escape as xml_escape
 
 import requests
@@ -82,7 +82,7 @@ def make_session(pool_size: int = 10) -> requests.Session:
         total=3,
         backoff_factor=1,
         status_forcelist=[502, 503, 504],
-        allowed_methods=["POST"],
+        allowed_methods=frozenset(["GET", "POST", "PUT"]),
     )
     adapter = HTTPAdapter(
         max_retries=retry,
@@ -155,7 +155,7 @@ def fetch_report_csv(
     csv_bytes = base64.b64decode(bytes_match.group(1))
 
     stem = report_stem(req.report_path)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     filename = f"{stem}_{timestamp}.csv"
     log.info("Fetched %s (%d bytes)", filename, len(csv_bytes))
     return filename, csv_bytes

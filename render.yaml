@@ -4,8 +4,8 @@ services:
     runtime: python
     plan: free
     healthCheckPath: /health
-    buildCommand: pip install .
-    startCommand: uvicorn bip_api.main:app --host 0.0.0.0 --port $PORT
+    buildCommand: pip install uv && uv sync --frozen --no-dev
+    startCommand: uv run uvicorn bip_api.main:app --host 0.0.0.0 --port $PORT
     envVars:
       # Oracle credentials — set in Render dashboard, not committed
       - key: ORACLE_USERNAME
@@ -28,6 +28,8 @@ services:
       # Tunables (safe defaults)
       - key: REPORTS_FILE
         value: reports.txt
+      - key: RECEIPT_REPORT_PATH
+        value: ""
       - key: MAX_BATCH_SIZE
         value: "20"
       - key: REQUEST_TIMEOUT
@@ -36,9 +38,11 @@ services:
         value: "10"
       - key: CACHE_TTL
         value: "300"
+      - key: CACHE_MAXSIZE
+        value: "128"
       - key: FILE_AGE_THRESHOLD_HOURS
         value: "4.0"
       - key: CORS_ORIGINS
-        value: "*"
+        sync: false
       - key: DEBUG
         value: "false"

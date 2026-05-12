@@ -26,10 +26,17 @@ class Settings(BaseSettings):
     # File-age check: skip Oracle if a GitHub file is younger than this threshold
     file_age_threshold_hours: float = 4.0
 
+    # Explicit XDO path for the receipt details report used by POST /reports/match.
+    # Falls back to the first "receipt"-named path in reports_file if left empty.
+    receipt_report_path: str = ""
+
+    # Maximum number of entries in the in-memory report cache (LRU eviction).
+    cache_maxsize: int = 128
+
     # Comma-separated origins for CORS, or "*" for any.
-    # MUST be tightened before production (e.g. "https://reports.example.com").
-    # Leaving this as "*" allows any website to call the API from a browser.
-    cors_origins: str = "*"
+    # Empty string (default) disables cross-origin access entirely.
+    # Set to your frontend's origin in production (e.g. "https://reports.example.com").
+    cors_origins: str = ""
 
     debug: bool = False
 
@@ -49,4 +56,4 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     # Required fields are loaded from env / .env at runtime; mypy can't see that.
-    return Settings()  # type: ignore[call-arg]
+    return Settings()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import time
 import zipfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -9,6 +10,7 @@ import pytest
 import requests
 from fastapi.testclient import TestClient
 
+from bip_api.cache import ReportCache
 from bip_api.client import fetch_report_csv
 from bip_api.config import Settings, get_settings
 from bip_api.exceptions import AuthError, ReportError
@@ -20,6 +22,7 @@ FAKE_SETTINGS = Settings(
     oracle_username="testuser",
     oracle_password="testpass",
     oracle_base_url="https://fake.oracle.com",
+    reports_file=Path("/nonexistent/reports.txt"),  # prevents extra cache-warming fetches
 )
 FAKE_SESSION = MagicMock(spec=requests.Session)
 
@@ -304,5 +307,424 @@ def test_download_batch_partial_failure_returns_zip_with_headers(
     with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
         assert zf.namelist() == ["AR_Report.csv"]
         assert zf.read("AR_Report.csv") == CSV_BYTES
+
+
+# ---------------------------------------------------------------------------
+# X-Cache header
+# ---------------------------------------------------------------------------
+
+@patch("bip_api.routers.reports.fetch_report_csv")
+def test_x_cache_oracle(mock_fetch: MagicMock, client: TestClient) -> None:
+    """A fresh Oracle fetch should set X-Cache: oracle."""
+    mock_fetch.return_value = ("AR_Report.csv", CSV_BYTES)
+    resp = client.post("/reports/download", json=_single_body())
+    assert resp.status_code == 200
+    assert resp.headers["x-cache"] == "oracle"
+
+
+@patch("bip_api.routers.reports.fetch_report_csv")
+@patch("bip_api.routers.reports.get_latest_report_from_github")
+def test_x_cache_github(mock_github: MagicMock, mock_fetch: MagicMock, client: TestClient) -> None:
+    """A GitHub cache hit should set X-Cache: github."""
+    mock_github.return_value = ("AR_Report_20250101_120000.csv", CSV_BYTES)
+    resp = client.post("/reports/download", json=_single_body())
+    assert resp.status_code == 200
+    assert resp.headers["x-cache"] == "github"
+    mock_fetch.assert_not_called()
+
+
+@patch("bip_api.routers.reports.fetch_report_csv")
+def test_x_cache_zip_uses_highest_cost_tier(mock_fetch: MagicMock, client: TestClient) -> None:
+    """ZIP response X-Cache should reflect the highest-cost tier across all fetches."""
+    mock_fetch.side_effect = [
+        ("AR_Report.csv", CSV_BYTES),
+        ("AP_Report.csv", b"col3,col4\n"),
+    ]
+    resp = client.post(
+        "/reports/download",
+        json={
+            "reports": [
+                {"report_path": FAKE_REPORT_PATH},
+                {"report_path": "/Custom/Finance/AP_Report.xdo"},
+            ]
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/zip"
+    # Both fetches came from Oracle (cache is empty in this test).
+    assert resp.headers["x-cache"] == "oracle"
+
+
+# ---------------------------------------------------------------------------
+# ReportCache unit tests
+# ---------------------------------------------------------------------------
+
+def test_cache_ttl_expiry() -> None:
+    """Entries past their TTL must not be returned."""
+    cache = ReportCache(ttl_seconds=60)
+    req = DownloadRequest(report_path="/test.xdo")
+    cache.set(req, "test.csv", b"data")
+
+    with patch("bip_api.cache.time.monotonic", return_value=time.monotonic() + 61):
+        assert cache.get(req) is None
+
+
+def test_cache_lru_eviction() -> None:
+    """When the cache exceeds maxsize, the least-recently-used entry is evicted."""
+    cache = ReportCache(ttl_seconds=300, maxsize=2)
+    req_a = DownloadRequest(report_path="/a.xdo")
+    req_b = DownloadRequest(report_path="/b.xdo")
+    req_c = DownloadRequest(report_path="/c.xdo")
+
+    cache.set(req_a, "a.csv", b"a")
+    cache.set(req_b, "b.csv", b"b")
+    # Access a so b becomes LRU
+    cache.get(req_a)
+    # Adding c should evict b
+    cache.set(req_c, "c.csv", b"c")
+
+    assert cache.get(req_a) is not None
+    assert cache.get(req_c) is not None
+    assert cache.get(req_b) is None  # evicted
+
+
+def test_cache_hit_returns_correct_data() -> None:
+    cache = ReportCache(ttl_seconds=300)
+    req = DownloadRequest(report_path="/x.xdo")
+    cache.set(req, "x.csv", b"content")
+    result = cache.get(req)
+    assert result == ("x.csv", b"content")
+
+
+@patch("bip_api.routers.reports.fetch_report_csv")
+def test_download_non_utf8_csv_does_not_crash(mock_fetch: MagicMock, client: TestClient) -> None:
+    """Non-UTF-8 bytes from Oracle must not raise UnicodeDecodeError."""
+    # Latin-1 encoded em-dash (0x96) is invalid UTF-8.
+    latin1_csv = b"RECEIPT_NUMBER,NAME\r\n18-19/Jan/JV0899,Caf\x96 Corp\r\n"
+    mock_fetch.return_value = ("Receipt.csv", latin1_csv)
+    resp = client.post(
+        "/reports/download",
+        json={"reports": [{"report_path": FAKE_REPORT_PATH, "receipt_number": "18-19/Jan/JV0899"}]},
+    )
+    assert resp.status_code == 200
+    assert "text/csv" in resp.headers["content-type"]
+
+
+# ---------------------------------------------------------------------------
+# POST /reports/match
+# ---------------------------------------------------------------------------
+
+RECEIPT_CSV = (
+    "BILL_CUSTOMER_NAME,RECEIPT_NUMBER,RECEIPT_DATE,RECEIPT_AMOUNT\n"
+    "Acme Corp,REC001,15-01-2024,1000.00\n"
+    "Acme Corp,REC002,20-01-2024,500.50\n"
+    "Other Co,REC003,10-02-2024,250.00\n"
+)
+
+MATCH_SETTINGS = Settings(
+    oracle_username="testuser",
+    oracle_password="testpass",
+    oracle_base_url="https://fake.oracle.com",
+    receipt_report_path="/Custom/Receipts/Receipt_Details.xdo",
+    reports_file=Path("/nonexistent/reports.txt"),
+)
+
+
+@pytest.fixture()
+def match_client() -> TestClient:
+    app.dependency_overrides[get_settings] = lambda: MATCH_SETTINGS
+    app.dependency_overrides[_get_session] = lambda: FAKE_SESSION
+    with TestClient(app) as c:
+        yield c
+    app.dependency_overrides[get_settings] = lambda: FAKE_SETTINGS
+
+
+@patch("bip_api.routers.reports.fetch_report_csv")
+def test_match_by_receipt_number(mock_fetch: MagicMock, match_client: TestClient) -> None:
+    """Step 1: payment_reference + total_amount (exact) → single hit → populated."""
+    mock_fetch.return_value = ("Receipt_Details_20240115_120000.csv", RECEIPT_CSV.encode())
+    resp = match_client.post(
+        "/reports/match",
+        json={
+            "customer_name": "Acme Corp",
+            "payment_reference": "REC001",
+            "payment_date": "2024/01/15",
+            "total_amount": 1000.0,
+            "invoices": [],
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["fusion_receipt_number"] == "REC001"
+    assert data["fusion_customer_name"] == "Acme Corp"
+    assert data["fusion_receipt_date"] == "2024/01/15"
+
+
+@patch("bip_api.routers.reports.fetch_report_csv")
+def test_match_step1_wrong_amount_returns_null(mock_fetch: MagicMock, match_client: TestClient) -> None:
+    """Step 1: receipt_number matches but amount does not → null."""
+    mock_fetch.return_value = ("Receipt_Details_20240115_140000.csv", RECEIPT_CSV.encode())
+    resp = match_client.post(
+        "/reports/match",
+        json={
+            "customer_name": "Acme Corp",
+            "payment_reference": "REC001",
+            "total_amount": 999.0,  # wrong amount
+            "invoices": [],
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["fusion_receipt_number"] is None
+
+
+@patch("bip_api.routers.reports.fetch_report_csv")
+def test_match_by_amount_and_date(mock_fetch: MagicMock, match_client: TestClient) -> None:
+    """Step 2: RECEIPT_DATE + BILL_CUSTOMER_NAME + RECEIPT_AMOUNT (exact) → single hit."""
+    mock_fetch.return_value = ("Receipt_Details_20240120_120000.csv", RECEIPT_CSV.encode())
+    resp = match_client.post(
+        "/reports/match",
+        json={
+            "customer_name": "Acme Corp",
+            "payment_date": "2024/01/20",
+            "total_amount": 500.50,
+            "invoices": [],
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["fusion_receipt_number"] == "REC002"
+    assert data["fusion_receipt_date"] == "2024/01/20"
+
+
+@patch("bip_api.routers.reports.fetch_report_csv")
+def test_match_no_match_returns_nulls(mock_fetch: MagicMock, match_client: TestClient) -> None:
+    """When no row matches, fusion_* fields must all be null."""
+    mock_fetch.return_value = ("Receipt_Details_20240115_120000.csv", RECEIPT_CSV.encode())
+    resp = match_client.post(
+        "/reports/match",
+        json={
+            "customer_name": "Unknown Corp",
+            "payment_reference": "DOESNOTEXIST",
+            "invoices": [],
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["fusion_receipt_number"] is None
+    assert data["fusion_customer_name"] is None
+    assert data["fusion_receipt_date"] is None
+
+
+@patch("bip_api.routers.reports.fetch_report_csv")
+def test_match_ambiguous_returns_nulls(mock_fetch: MagicMock, match_client: TestClient) -> None:
+    """Multiple rows match → null (zero or >1 hit rule)."""
+    ambiguous_csv = (
+        "BILL_CUSTOMER_NAME,RECEIPT_NUMBER,RECEIPT_DATE,RECEIPT_AMOUNT\n"
+        "Acme Corp,REC-A,15-01-2024,1000.00\n"
+        "Acme Corp,REC-B,15-01-2024,1000.00\n"
+    )
+    mock_fetch.return_value = ("Receipt_Details_20240115_130000.csv", ambiguous_csv.encode())
+    resp = match_client.post(
+        "/reports/match",
+        json={
+            "customer_name": "Acme Corp",
+            "payment_date": "2024/01/15",
+            "total_amount": 1000.0,
+            "invoices": [],
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["fusion_receipt_number"] is None
+
+
+# ---------------------------------------------------------------------------
+# Invoice matching
+# ---------------------------------------------------------------------------
+
+INVOICE_CSV = (
+    "INVOICE_NUMBER,INVOICE_DATE,INVOICE_AMOUNT\n"
+    "INV-001,15-01-2024,500.00\n"
+    "126125908454,20-01-2024,750.00\n"  # contains "25908454" as substring
+    "6153004273089,22-01-2024,300.00\n"  # contains "6153004273" as substring
+)
+
+MATCH_WITH_INVOICE_SETTINGS = Settings(
+    oracle_username="testuser",
+    oracle_password="testpass",
+    oracle_base_url="https://fake.oracle.com",
+    receipt_report_path="/Custom/Receipts/Receipt_Details.xdo",
+    reports_file=Path("/nonexistent/invoice_reports.txt"),
+)
+
+
+@pytest.fixture()
+def invoice_match_client(tmp_path: Path) -> TestClient:
+    # reports_file lists both receipt and invoice paths so match_record fetches both.
+    reports_file = tmp_path / "reports.txt"
+    reports_file.write_text(
+        "/Custom/Receipts/Receipt_Details.xdo\n"
+        "/Custom/Invoices/Invoice_Details.xdo\n"
+    )
+    settings = Settings(
+        oracle_username="testuser",
+        oracle_password="testpass",
+        oracle_base_url="https://fake.oracle.com",
+        receipt_report_path="/Custom/Receipts/Receipt_Details.xdo",
+        reports_file=reports_file,
+    )
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[_get_session] = lambda: FAKE_SESSION
+    with TestClient(app) as c:
+        yield c
+    app.dependency_overrides[get_settings] = lambda: FAKE_SETTINGS
+
+
+@patch("bip_api.routers.reports.fetch_report_csv")
+def test_invoice_match_step1_exact(mock_fetch: MagicMock, invoice_match_client: TestClient) -> None:
+    """Invoice Step 1: invoice_number + invoice_date exact match."""
+    mock_fetch.side_effect = [
+        ("Receipt_Details_20240115_120000.csv", RECEIPT_CSV.encode()),
+        ("Invoice_Details_20240115_120000.csv", INVOICE_CSV.encode()),
+    ]
+    resp = invoice_match_client.post(
+        "/reports/match",
+        json={
+            "customer_name": "Acme Corp",
+            "payment_reference": "REC001",
+            "total_amount": 1000.0,
+            "invoices": [
+                {"invoice_number": "INV-001", "invoice_date": "15-01-2024", "invoice_amount": 500.0}
+            ],
+        },
+    )
+    assert resp.status_code == 200
+    inv = resp.json()["invoices"][0]
+    assert inv["fusion_invoice_number"] == "INV-001"
+    assert inv["fusion_invoice_date"] == "15-01-2024"
+    assert inv["fusion_invoice_amount"] == 500.0
+
+
+@patch("bip_api.routers.reports.fetch_report_csv")
+def test_invoice_match_step2_customer_invoice_number(mock_fetch: MagicMock, invoice_match_client: TestClient) -> None:
+    """Invoice Step 2: customer_invoice_number == report invoice_number + date."""
+    mock_fetch.side_effect = [
+        ("Receipt_Details_20240115_120000.csv", RECEIPT_CSV.encode()),
+        ("Invoice_Details_20240115_120001.csv", INVOICE_CSV.encode()),
+    ]
+    resp = invoice_match_client.post(
+        "/reports/match",
+        json={
+            "customer_name": "Acme Corp",
+            "payment_reference": "REC001",
+            "total_amount": 1000.0,
+            "invoices": [
+                {
+                    "invoice_number": "NOMATCH",
+                    "customer_invoice_number": "INV-001",
+                    "invoice_date": "15-01-2024",
+                }
+            ],
+        },
+    )
+    assert resp.status_code == 200
+    inv = resp.json()["invoices"][0]
+    assert inv["fusion_invoice_number"] == "INV-001"
+
+
+@patch("bip_api.routers.reports.fetch_report_csv")
+def test_invoice_match_step3_substring(mock_fetch: MagicMock, invoice_match_client: TestClient) -> None:
+    """Invoice Step 3: invoice_number is substring of report invoice_number + date."""
+    mock_fetch.side_effect = [
+        ("Receipt_Details_20240115_120000.csv", RECEIPT_CSV.encode()),
+        ("Invoice_Details_20240115_120002.csv", INVOICE_CSV.encode()),
+    ]
+    resp = invoice_match_client.post(
+        "/reports/match",
+        json={
+            "customer_name": "Acme Corp",
+            "payment_reference": "REC001",
+            "total_amount": 1000.0,
+            "invoices": [
+                {"invoice_number": "25908454", "invoice_date": "20-01-2024"}
+            ],
+        },
+    )
+    assert resp.status_code == 200
+    inv = resp.json()["invoices"][0]
+    assert inv["fusion_invoice_number"] == "126125908454"
+
+
+@patch("bip_api.routers.reports.fetch_report_csv")
+def test_invoice_match_ambiguous_returns_nulls(mock_fetch: MagicMock, invoice_match_client: TestClient) -> None:
+    """Invoice Step 3 with two substring matches → fusion fields null."""
+    ambiguous_inv_csv = (
+        "INVOICE_NUMBER,INVOICE_DATE,INVOICE_AMOUNT\n"
+        "126125908454,20-01-2024,750.00\n"
+        "999125908454,20-01-2024,200.00\n"  # also contains "25908454"
+    )
+    mock_fetch.side_effect = [
+        ("Receipt_Details_20240115_120000.csv", RECEIPT_CSV.encode()),
+        ("Invoice_Details_20240115_120003.csv", ambiguous_inv_csv.encode()),
+    ]
+    resp = invoice_match_client.post(
+        "/reports/match",
+        json={
+            "customer_name": "Acme Corp",
+            "payment_reference": "REC001",
+            "total_amount": 1000.0,
+            "invoices": [
+                {"invoice_number": "25908454", "invoice_date": "20-01-2024"}
+            ],
+        },
+    )
+    assert resp.status_code == 200
+    inv = resp.json()["invoices"][0]
+    assert inv["fusion_invoice_number"] is None
+    assert inv["fusion_invoice_date"] is None
+    assert inv["fusion_invoice_amount"] is None
+
+
+@patch("bip_api.routers.reports.fetch_report_csv")
+def test_invoice_match_no_invoice_report_returns_null_fusion(
+    mock_fetch: MagicMock, match_client: TestClient
+) -> None:
+    """When no invoice report is configured, fusion invoice fields are null."""
+    mock_fetch.return_value = ("Receipt_Details_20240115_120000.csv", RECEIPT_CSV.encode())
+    resp = match_client.post(
+        "/reports/match",
+        json={
+            "customer_name": "Acme Corp",
+            "payment_reference": "REC001",
+            "total_amount": 1000.0,
+            "invoices": [
+                {"invoice_number": "INV-001", "invoice_date": "15-01-2024"}
+            ],
+        },
+    )
+    assert resp.status_code == 200
+    inv = resp.json()["invoices"][0]
+    assert inv["fusion_invoice_number"] is None
+    assert inv["fusion_invoice_date"] is None
+    assert inv["fusion_invoice_amount"] is None
+
+
+def test_match_no_receipt_path_configured(client: TestClient, tmp_path: Path) -> None:
+    """Returns 500 when no receipt path can be found."""
+    empty_settings = Settings(
+        oracle_username="u",
+        oracle_password="p",
+        oracle_base_url="https://x.com",
+        reports_file=tmp_path / "empty.txt",
+        receipt_report_path="",
+    )
+    (tmp_path / "empty.txt").write_text("")
+    app.dependency_overrides[get_settings] = lambda: empty_settings
+    resp = client.post(
+        "/reports/match",
+        json={"customer_name": "Acme", "invoices": []},
+    )
+    assert resp.status_code == 500
+    assert "receipt report path" in resp.json()["detail"].lower()
+    app.dependency_overrides[get_settings] = lambda: FAKE_SETTINGS
 
 

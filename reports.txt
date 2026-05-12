@@ -1,5 +1,2 @@
-# Add your Oracle BI Publisher report XDO paths here, one per line.
-# Lines starting with # are ignored.
-# Example:
-# /Custom/Finacials/Receivable Transactions/Invoice Details Report.xdo
+/Custom/Finacials/Receivable Transactions/Invoice Details Report.xdo
 /Custom/Finacials/Receivables/Receipt Details Report.xdo

@@ -43,6 +43,7 @@ ignore = ["B008"]
 strict = true
 python_version = "3.11"
 mypy_path = "src"
+plugins = ["pydantic.mypy"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

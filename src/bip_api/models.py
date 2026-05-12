@@ -98,12 +98,14 @@ class HealthResponse(BaseModel):
 # --- Match endpoint models ---
 
 class InvoiceItem(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     invoice_number: str
     invoice_date: str | None = None
     invoice_amount: float | None = None
     description: str | None = None
     customer_invoice_number: str | None = None
-    storeNo: str | None = None
+    store_no: str | None = Field(None, alias="storeNo")
 
 
 class ReceiptRecord(BaseModel):
@@ -117,10 +119,12 @@ class ReceiptRecord(BaseModel):
     confidence_score: float | None = None
     confidence_label: str | None = None
     invoice_count: int | None = None
-    meta: dict | None = Field(None, alias="_meta")
+    meta: dict[str, object] | None = Field(None, alias="_meta")
 
 
 class FusedInvoiceItem(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     invoice_number: str
     fusion_invoice_number: str | None = None
     invoice_date: str | None = None
@@ -129,7 +133,7 @@ class FusedInvoiceItem(BaseModel):
     fusion_invoice_amount: float | None = None
     description: str | None = None
     customer_invoice_number: str | None = None
-    storeNo: str | None = None
+    store_no: str | None = Field(None, alias="storeNo")
 
 
 class MatchedRecord(BaseModel):
@@ -146,4 +150,4 @@ class MatchedRecord(BaseModel):
     confidence_score: float | None = None
     confidence_label: str | None = None
     invoice_count: int | None = None
-    meta: dict | None = Field(None, alias="_meta")
+    meta: dict[str, object] | None = Field(None, alias="_meta")

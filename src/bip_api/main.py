@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -12,7 +13,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from bip_api import __version__
-from bip_api.cache import ReportCache
+from bip_api.cache import ParsedCSVCache, ReportCache
 from bip_api.client import make_session
 from bip_api.config import get_settings
 from bip_api.models import HealthResponse
@@ -21,12 +22,40 @@ from bip_api.routers import reports
 log = logging.getLogger(__name__)
 
 
+class _JsonFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        d: dict[str, object] = {
+            "ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%SZ"),
+            "level": record.levelname,
+            "logger": record.name,
+            "msg": record.getMessage(),
+        }
+        if record.exc_info:
+            d["exc"] = self.formatException(record.exc_info)
+        return json.dumps(d)
+
+
+def _configure_logging(debug: bool) -> None:
+    handler = logging.StreamHandler()
+    handler.setFormatter(_JsonFormatter())
+    # Only configure the bip_api logger so we don't interfere with uvicorn's handlers.
+    pkg_logger = logging.getLogger("bip_api")
+    pkg_logger.handlers = [handler]
+    pkg_logger.setLevel(logging.DEBUG if debug else logging.INFO)
+    pkg_logger.propagate = False
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     settings = get_settings()
     session = make_session(pool_size=settings.http_pool_size)
     app.state.http_session = session
-    app.state.report_cache = ReportCache(settings.cache_ttl) if settings.cache_ttl > 0 else None
+    app.state.report_cache = (
+        ReportCache(settings.cache_ttl, maxsize=settings.cache_maxsize)
+        if settings.cache_ttl > 0
+        else None
+    )
+    app.state.parsed_csv_cache = ParsedCSVCache()
 
     log.info(
         "Started: pool_size=%d cache_ttl=%ds",
@@ -41,6 +70,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    _configure_logging(settings.debug)
 
     application = FastAPI(
         title="BIP Downloader API",

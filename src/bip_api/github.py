@@ -3,7 +3,8 @@ from __future__ import annotations
 import base64
 import logging
 import re
-from datetime import datetime
+import time
+from datetime import datetime, timezone
 
 import requests
 
@@ -61,11 +62,13 @@ def get_latest_report_from_github(
     if not ts_match:
         return None
     try:
-        file_dt = datetime.strptime(ts_match.group(1), "%Y%m%d_%H%M%S")
+        file_dt = datetime.strptime(ts_match.group(1), "%Y%m%d_%H%M%S").replace(
+            tzinfo=timezone.utc
+        )
     except ValueError:
         return None
 
-    age_hours = (datetime.now() - file_dt).total_seconds() / 3600
+    age_hours = (datetime.now(timezone.utc) - file_dt).total_seconds() / 3600
     if age_hours >= settings.file_age_threshold_hours:
         log.info(
             "GitHub file %s is stale (%.1fh >= %.1fh threshold) — will refresh",
@@ -107,24 +110,49 @@ def commit_report(
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
+    content = base64.b64encode(csv_bytes).decode()
 
-    # Check whether the file already exists so we can pass its SHA (required for updates).
+    # Optimistic PUT: filenames are timestamped so collisions are rare.
+    # On 422 (file already exists), fetch SHA and retry once.
+    # On transient 5xx, retry up to 2 more times with backoff (the session-level
+    # Retry adapter only covers POST; background tasks need explicit retry here).
     sha: str | None = None
-    check = session.get(url, headers=headers, timeout=15)
-    if check.status_code == 200:
-        sha = check.json().get("sha")
+    for attempt in range(3):
+        payload: dict[str, str] = {
+            "message": f"report: add {filename}",
+            "content": content,
+            "branch": settings.github_branch,
+        }
+        if sha:
+            payload["sha"] = sha
 
-    payload: dict[str, str] = {
-        "message": f"report: add {filename}",
-        "content": base64.b64encode(csv_bytes).decode(),
-        "branch": settings.github_branch,
-    }
-    if sha:
-        payload["sha"] = sha
+        resp = session.put(url, json=payload, headers=headers, timeout=30)
 
-    resp = session.put(url, json=payload, headers=headers, timeout=30)
-    if resp.ok:
-        commit_url = resp.json().get("commit", {}).get("html_url", "")
-        log.info("Committed %s → %s", path, commit_url)
-    else:
+        if resp.ok:
+            commit_url = resp.json().get("commit", {}).get("html_url", "")
+            log.info("Committed %s → %s", path, commit_url)
+            return
+
+        if resp.status_code == 422 and sha is None:
+            # File already exists; retrieve its SHA and retry immediately.
+            check = session.get(url, headers=headers, timeout=15)
+            if check.status_code == 200:
+                sha = check.json().get("sha")
+            continue
+
+        if resp.status_code in (500, 502, 503, 504) and attempt < 2:
+            wait = 2 ** attempt
+            log.warning(
+                "GitHub commit transient error %d for %s — retrying in %ds",
+                resp.status_code, path, wait,
+            )
+            time.sleep(wait)
+            continue
+
         log.error("GitHub commit failed for %s: %s %s", path, resp.status_code, resp.text[:300])
+        return
+    else:
+        # All attempts used continue (422 + SHA fetch kept failing) — log so it's not silent.
+        log.error(
+            "GitHub commit failed for %s: exhausted retries, could not retrieve file SHA", path
+        )
