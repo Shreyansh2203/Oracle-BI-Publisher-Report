@@ -76,13 +76,13 @@ ELSE (payment_reference IS null):
 
 ```
 Search the Invoice Details Report for rows where:
-    invoice_number = invoice_number (from input, exact match)
-    AND invoice_date = invoice_date (from input, exact match)
+    invoice_number (TRANSACTION_NUMBER) = invoice_number (from input, exact match)
+    AND invoice_date (TRANSACTION_DATE) = invoice_date (from input, exact match)
 
 IF exactly 1 row found:
-    fusion_invoice_number = that row's invoice_number
-    fusion_invoice_date   = that row's invoice_date
-    fusion_invoice_amount = that row's invoice_amount
+    fusion_invoice_number = that row's TRANSACTION_NUMBER
+    fusion_invoice_date   = that row's TRANSACTION_DATE
+    fusion_invoice_amount = that row's TOTAL_AMOUNTS
     → STOP. Do not go to Step 2.
 
 ELSE (0 rows or 2+ rows found):
@@ -95,8 +95,8 @@ ELSE (0 rows or 2+ rows found):
 
 ```
 Search the Invoice Details Report for rows where:
-    customer_invoice_number = DOCUMENT_NUMBER (from input)
-    AND invoice_date = invoice_date           (from input, exact match)
+    customer_invoice_number (DOCUMENT_NUMBER) = DOCUMENT_NUMBER (from input)
+    AND invoice_date (TRANSACTION_DATE) = invoice_date (from input, exact match)
 
 IF exactly 1 row found:
     fusion_invoice_number = that row's TRANSACTION_NUMBER
@@ -115,7 +115,7 @@ ELSE (0 rows or 2+ rows found):
 Use this when the report's invoice number is LONGER than the input, and the input number appears INSIDE the report's number.
 
 ```
-How to check: Does report's invoice_number CONTAIN input's invoice_number as a substring?
+How to check: Does report's invoice_number(TRANSACTION_NUMBER) CONTAIN input's invoice_number as a substring?
 
 Examples:
     Input: 25908454    Report: 126125908454   → MATCH   (report contains input)
