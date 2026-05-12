@@ -1,4 +1,3 @@
-import httpx
 import asyncio
 import json
 
@@ -50,8 +49,9 @@ payload = {
 }
 
 async def main():
-    from fastapi.testclient import TestClient
     import sys
+
+    from fastapi.testclient import TestClient
     sys.path.append("c:\\Oracle-BI-Publisher-Report\\src")
     from bip_api.main import app
     with TestClient(app) as client:

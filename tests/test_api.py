@@ -6,6 +6,8 @@ import zipfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from typing import Iterator
+
 import pytest
 import requests
 from fastapi.testclient import TestClient
@@ -32,7 +34,7 @@ app.dependency_overrides[_get_github_session] = lambda: FAKE_SESSION
 
 
 CSV_BYTES = b"col1,col2\nval1,val2\n"
-FAKE_REPORT_PATH = "/Custom/Finance/AR_Report.xdo"
+FAKE_REPORT_PATH = "/Custom/Finacials/Receivable Transactions/Invoice Details Report.xdo"
 
 
 @pytest.fixture(name="client")
@@ -488,7 +490,7 @@ MATCH_SETTINGS = Settings(
 
 
 @pytest.fixture()
-def match_client() -> TestClient:
+def match_client() -> Iterator[TestClient]:
     app.dependency_overrides[get_settings] = lambda: MATCH_SETTINGS
     app.dependency_overrides[_get_oracle_session] = lambda: FAKE_SESSION
     app.dependency_overrides[_get_github_session] = lambda: FAKE_SESSION
@@ -616,7 +618,7 @@ MATCH_WITH_INVOICE_SETTINGS = Settings(
 
 
 @pytest.fixture()
-def invoice_match_client(tmp_path: Path) -> TestClient:
+def invoice_match_client(tmp_path: Path) -> Iterator[TestClient]:
     # reports_file lists both receipt and invoice paths so match_record fetches both.
     reports_file = tmp_path / "reports.txt"
     reports_file.write_text(
