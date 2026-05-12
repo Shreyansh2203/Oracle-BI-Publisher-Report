@@ -423,7 +423,7 @@ def _match_invoice_item(
         invoice_number=inv.invoice_number,
         fusion_invoice_number=matched_row.get(_INV_NUMBER_COL, "").strip() or None,
         invoice_date=inv.invoice_date,
-        fusion_invoice_date=matched_row.get(_INV_DATE_COL, "").strip() or None,
+        fusion_invoice_date=_convert_csv_date(matched_row.get(_INV_DATE_COL, "").strip()) or None,
         invoice_amount=inv.invoice_amount,
         fusion_invoice_amount=_parse_csv_amount(matched_row.get(_INV_AMOUNT_COL, "")),
         description=inv.description,
