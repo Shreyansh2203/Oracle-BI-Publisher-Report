@@ -1,0 +1,46 @@
+{
+  "customer_name": "New Horizon Foods",
+  "payment_reference": null,
+  "payment_date": "2026/05/10",
+  "invoices": [
+    {
+      "invoice_number": "225812831804",
+      "invoice_date": "2025/11/14",
+      "invoice_amount": 51.2,
+      "description": null,
+      "customer_invoice_number": null,
+      "storeNo": null
+    },
+    {
+      "invoice_number": "2258128318041",
+      "invoice_date": "2026/05/02",
+      "invoice_amount": 100,
+      "description": null,
+      "customer_invoice_number": null,
+      "storeNo": null
+    },
+    {
+      "invoice_number": "2258128318042",
+      "invoice_date": "2026/05/01",
+      "invoice_amount": 200,
+      "description": null,
+      "customer_invoice_number": null,
+      "storeNo": null
+    }
+  ],
+  "total_amount": 2300,
+  "confidence_score": 0.83,
+  "confidence_label": "HIGH",
+  "invoice_count": 1,
+  "_meta": {
+    "file_kind": "native_pdf",
+    "filename": "144.98 W.pdf",
+    "input_tokens": 5662,
+    "output_tokens": 128,
+    "total_tokens": 5790,
+    "api_calls": 2,
+    "response_time_ms": 2488,
+    "num_pages": 1,
+    "warnings": []
+  }
+}
