@@ -15,7 +15,7 @@ class DownloadRequest(BaseModel):
         "json_schema_extra": {
             "examples": [
                 {
-                    "report_path": "/Custom/Finacials/Receivable Transactions/Invoice Details Report.xdo",
+                    "report_path": "/Custom/Finacials/Receivable Transactions/Invoice Details Report.xdo",  # noqa: E501
                     "customer_name": "Acme Corp",
                     "from_date": "01-01-2024",
                     "to_date": "31-03-2024",
@@ -55,12 +55,12 @@ class ReportRequest(BaseModel):
     model_config = {
         "json_schema_extra": {
             "examples": [
-                {"reports": [{"report_path": "/Custom/Finacials/Receivable Transactions/Invoice Details Report.xdo"}]},
+                {"reports": [{"report_path": "/Custom/Finacials/Receivable Transactions/Invoice Details Report.xdo"}]},  # noqa: E501
                 {
                     "reports": [
-                        {"report_path": "/Custom/Finacials/Receivable Transactions/Invoice Details Report.xdo"},
+                        {"report_path": "/Custom/Finacials/Receivable Transactions/Invoice Details Report.xdo"},  # noqa: E501
                         {
-                            "report_path": "/Custom/Finacials/Receivable Transactions/Receipt Details Report.xdo",
+                            "report_path": "/Custom/Finacials/Receivable Transactions/Receipt Details Report.xdo",  # noqa: E501
                             "from_date": "01-01-2024",
                             "to_date": "31-03-2024",
                         },
