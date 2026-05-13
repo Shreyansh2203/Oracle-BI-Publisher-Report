@@ -9,6 +9,10 @@ on:
 jobs:
   ci:
     runs-on: ubuntu-latest
+    env:
+      ORACLE_USERNAME: testuser
+      ORACLE_PASSWORD: testpass
+      ORACLE_BASE_URL: https://fake.oracle.com
 
     steps:
       - uses: actions/checkout@v4
