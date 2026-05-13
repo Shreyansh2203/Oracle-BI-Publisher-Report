@@ -1,83 +1,40 @@
 from __future__ import annotations
-
 import base64
 import logging
 import re
 import textwrap
 from datetime import UTC, datetime
 from xml.sax.saxutils import escape as xml_escape
-
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-
 from bip_api.config import Settings
 from bip_api.exceptions import AuthError, ReportError
 from bip_api.models import DownloadRequest
 
 log = logging.getLogger(__name__)
-
 _SERVICE_PATH = "/xmlpserver/services/PublicReportService"
 _SOAP_NS = "http://xmlns.oracle.com/oxp/service/PublicReportService"
 _ENVELOPE_NS = "http://schemas.xmlsoap.org/soap/envelope/"
 _CONTENT_TYPE = "text/xml; charset=utf-8"
-
-_RE_FAULT = re.compile(r"<faultstring>(.*?)</faultstring>", re.DOTALL)
-_RE_REPORT_BYTES = re.compile(r"<reportBytes>(.*?)</reportBytes>", re.DOTALL)
+_RE_FAULT = re.compile("<faultstring>(.*?)</faultstring>", re.DOTALL)
+_RE_REPORT_BYTES = re.compile("<reportBytes>(.*?)</reportBytes>", re.DOTALL)
 
 
 def _build_envelope(req: DownloadRequest, username: str, password: str) -> str:
-    # All user-supplied values are XML-escaped to prevent SOAP injection.
     params = ""
     if req.customer_name:
-        params += (
-            f"<pub:item>"
-            f"<pub:name>P_CUSTOMER_NAME</pub:name>"
-            f"<pub:values><pub:item>{xml_escape(req.customer_name)}</pub:item></pub:values>"
-            f"</pub:item>"
-        )
+        params += f"<pub:item><pub:name>P_CUSTOMER_NAME</pub:name><pub:values><pub:item>{xml_escape(req.customer_name)}</pub:item></pub:values></pub:item>"
     if req.from_date:
-        params += (
-            f"<pub:item>"
-            f"<pub:name>P_FROM_DATE</pub:name>"
-            f"<pub:values><pub:item>{xml_escape(req.from_date)}</pub:item></pub:values>"
-            f"</pub:item>"
-        )
+        params += f"<pub:item><pub:name>P_FROM_DATE</pub:name><pub:values><pub:item>{xml_escape(req.from_date)}</pub:item></pub:values></pub:item>"
     if req.to_date:
-        params += (
-            f"<pub:item>"
-            f"<pub:name>P_TO_DATE</pub:name>"
-            f"<pub:values><pub:item>{xml_escape(req.to_date)}</pub:item></pub:values>"
-            f"</pub:item>"
-        )
-
-    # PublicReportService passes credentials as body elements, not WS-Security headers.
-    return textwrap.dedent(f"""\
-        <?xml version="1.0" encoding="utf-8"?>
-        <soapenv:Envelope
-            xmlns:soapenv="{_ENVELOPE_NS}"
-            xmlns:pub="{_SOAP_NS}">
-          <soapenv:Header/>
-          <soapenv:Body>
-            <pub:runReport>
-              <pub:userID>{xml_escape(username)}</pub:userID>
-              <pub:password>{xml_escape(password)}</pub:password>
-              <pub:reportRequest>
-                <pub:reportAbsolutePath>{xml_escape(req.report_path)}</pub:reportAbsolutePath>
-                <pub:sizeOfDataChunkDownload>-1</pub:sizeOfDataChunkDownload>
-                <pub:parameterNameValues>
-                  {params}
-                </pub:parameterNameValues>
-                <pub:attributeFormat>csv</pub:attributeFormat>
-              </pub:reportRequest>
-            </pub:runReport>
-          </soapenv:Body>
-        </soapenv:Envelope>
-    """)
+        params += f"<pub:item><pub:name>P_TO_DATE</pub:name><pub:values><pub:item>{xml_escape(req.to_date)}</pub:item></pub:values></pub:item>"
+    return textwrap.dedent(
+        f'        <?xml version="1.0" encoding="utf-8"?>\n        <soapenv:Envelope\n            xmlns:soapenv="{_ENVELOPE_NS}"\n            xmlns:pub="{_SOAP_NS}">\n          <soapenv:Header/>\n          <soapenv:Body>\n            <pub:runReport>\n              <pub:userID>{xml_escape(username)}</pub:userID>\n              <pub:password>{xml_escape(password)}</pub:password>\n              <pub:reportRequest>\n                <pub:reportAbsolutePath>{xml_escape(req.report_path)}</pub:reportAbsolutePath>\n                <pub:sizeOfDataChunkDownload>-1</pub:sizeOfDataChunkDownload>\n                <pub:parameterNameValues>\n                  {params}\n                </pub:parameterNameValues>\n                <pub:attributeFormat>csv</pub:attributeFormat>\n              </pub:reportRequest>\n            </pub:runReport>\n          </soapenv:Body>\n        </soapenv:Envelope>\n    '
+    )
 
 
 def make_oracle_session(pool_size: int = 10) -> requests.Session:
-    """Session for Oracle BIP SOAP calls. Retries only POST (SOAP) on transient errors."""
     session = requests.Session()
     retry = Retry(
         total=3,
@@ -85,18 +42,13 @@ def make_oracle_session(pool_size: int = 10) -> requests.Session:
         status_forcelist=[502, 503, 504],
         allowed_methods=frozenset(["POST"]),
     )
-    adapter = HTTPAdapter(
-        max_retries=retry,
-        pool_connections=pool_size,
-        pool_maxsize=pool_size,
-    )
+    adapter = HTTPAdapter(max_retries=retry, pool_connections=pool_size, pool_maxsize=pool_size)
     session.mount("https://", adapter)
     session.mount("http://", adapter)
     return session
 
 
 def make_github_session(pool_size: int = 10) -> requests.Session:
-    """Session for GitHub API calls. Retries only GET; PUT/DELETE are retried manually."""
     session = requests.Session()
     retry = Retry(
         total=2,
@@ -104,36 +56,25 @@ def make_github_session(pool_size: int = 10) -> requests.Session:
         status_forcelist=[502, 503, 504],
         allowed_methods=frozenset(["GET"]),
     )
-    adapter = HTTPAdapter(
-        max_retries=retry,
-        pool_connections=pool_size,
-        pool_maxsize=pool_size,
-    )
+    adapter = HTTPAdapter(max_retries=retry, pool_connections=pool_size, pool_maxsize=pool_size)
     session.mount("https://", adapter)
     return session
 
 
 def report_name(report_path: str) -> str:
-    """Return the human-readable report name (basename without .xdo)."""
     return report_path.rstrip("/").rsplit("/", 1)[-1].removesuffix(".xdo")
 
 
 def report_stem(report_path: str) -> str:
-    """Return the filesystem-safe stem used in saved CSV filenames."""
     raw = report_name(report_path).replace(" ", "_")
-    # Strip characters that are unsafe in Content-Disposition filenames or shell paths.
-    return re.sub(r"[^\w\-]", "", raw)
+    return re.sub("[^\\w\\-]", "", raw)
 
 
 def fetch_report_csv(
-    req: DownloadRequest,
-    settings: Settings,
-    session: requests.Session,
+    req: DownloadRequest, settings: Settings, session: requests.Session
 ) -> tuple[str, bytes]:
-    """Call BIP SOAP API; return (csv_filename, csv_bytes)."""
     url = settings.oracle_base_url.rstrip("/") + _SERVICE_PATH
     envelope = _build_envelope(req, settings.oracle_username, settings.oracle_password)
-
     try:
         response = session.post(
             url,
@@ -143,23 +84,14 @@ def fetch_report_csv(
         )
     except requests.RequestException as exc:
         raise ReportError(f"Network error: {exc}") from exc
-
     if response.status_code == 401:
         raise AuthError("Oracle BIP authentication failed — check credentials")
-
     if not response.ok:
-        # Log full body internally; return a generic message to the caller so we
-        # don't echo Oracle internals (paths, principals, stack hints) back over HTTP.
         log.error(
-            "BIP HTTP %d for %s: %s",
-            response.status_code,
-            req.report_path,
-            response.text[:1000],
+            "BIP HTTP %d for %s: %s", response.status_code, req.report_path, response.text[:1000]
         )
         raise ReportError(f"Oracle BIP returned HTTP {response.status_code}")
-
     text = response.text
-
     fault_match = _RE_FAULT.search(text)
     if fault_match:
         fault = fault_match.group(1).strip()
@@ -167,16 +99,13 @@ def fetch_report_csv(
             raise AuthError("Oracle BIP authentication failed")
         log.error("BIP SOAP fault for %s: %s", req.report_path, fault)
         raise ReportError("Oracle BIP returned an error (see server logs)")
-
     bytes_match = _RE_REPORT_BYTES.search(text)
     if not bytes_match:
         log.error("BIP response missing reportBytes for %s: %s", req.report_path, text[:1000])
         raise ReportError("Oracle BIP returned an unexpected response shape")
-
     csv_bytes = base64.b64decode(bytes_match.group(1))
-
     stem = report_stem(req.report_path)
     timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
     filename = f"{stem}_{timestamp}.csv"
     log.info("Fetched %s (%d bytes)", filename, len(csv_bytes))
-    return filename, csv_bytes
+    return (filename, csv_bytes)

@@ -25,24 +25,5 @@
       - key: GITHUB_REPORTS_DIR
         value: reports
 
-      # Tunables (safe defaults)
-      - key: REPORTS_FILE
-        value: reports.txt
-      - key: RECEIPT_REPORT_PATH
-        value: ""
-      - key: MAX_BATCH_SIZE
-        value: "20"
-      - key: REQUEST_TIMEOUT
-        value: "120"
-      - key: HTTP_POOL_SIZE
-        value: "10"
-      - key: CACHE_TTL
-        value: "300"
-      - key: CACHE_MAXSIZE
-        value: "128"
-      - key: FILE_AGE_THRESHOLD_HOURS
-        value: "0.6"
-      - key: CORS_ORIGINS
-        sync: false
-      - key: DEBUG
-        value: "false"
+      # No tunables specified here. The application will use the safe defaults
+      # defined centrally in src/bip_api/config.py.

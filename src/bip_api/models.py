@@ -1,17 +1,14 @@
 from __future__ import annotations
-
 from datetime import datetime
-
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class DownloadRequest(BaseModel):
     report_path: str
     customer_name: str | None = None
-    from_date: str | None = None      # DD-MM-YYYY — passed to Oracle as P_FROM_DATE
-    to_date: str | None = None        # DD-MM-YYYY — passed to Oracle as P_TO_DATE
-    receipt_number: str | None = None  # post-filter: matched against RECEIPT_NUMBER column in CSV
-
+    from_date: str | None = None
+    to_date: str | None = None
+    receipt_number: str | None = None
     model_config = {
         "json_schema_extra": {
             "examples": [
@@ -48,21 +45,11 @@ class DownloadRequest(BaseModel):
 
     @property
     def has_filters(self) -> bool:
-        # Only Oracle-level filters — receipt_number is a Python post-filter and
-        # does not prevent GitHub caching of the full report.
         return bool(self.customer_name or self.from_date or self.to_date)
 
 
 class ReportRequest(BaseModel):
-    """
-    Request body for `POST /reports/download`.
-
-    Always a list of one or more `DownloadRequest`s. The endpoint returns a
-    raw CSV when `len(reports) == 1` and a ZIP archive when `len(reports) > 1`.
-    """
-
     reports: list[DownloadRequest]
-
     model_config = {
         "json_schema_extra": {
             "examples": [
@@ -96,11 +83,8 @@ class HealthResponse(BaseModel):
     version: str
 
 
-# --- Match endpoint models ---
-
 class InvoiceItem(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
-
     invoice_number: str
     invoice_date: str | None = None
     invoice_amount: float | None = None
@@ -111,10 +95,9 @@ class InvoiceItem(BaseModel):
 
 class ReceiptRecord(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
-
     customer_name: str
     payment_reference: str | None = None
-    payment_date: str | None = None  # YYYY/MM/DD
+    payment_date: str | None = None
     total_amount: float | None = None
     invoices: list[InvoiceItem] = []
     confidence_score: float | None = None
@@ -125,7 +108,6 @@ class ReceiptRecord(BaseModel):
 
 class FusedInvoiceItem(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
-
     invoice_number: str
     fusion_invoice_number: str | None = None
     invoice_date: str | None = None
@@ -139,7 +121,6 @@ class FusedInvoiceItem(BaseModel):
 
 class MatchedRecord(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
-
     customer_name: str
     fusion_customer_name: str | None = None
     payment_reference: str | None = None

@@ -1,8 +1,6 @@
 from __future__ import annotations
-
 from functools import lru_cache
 from pathlib import Path
-
 from pydantic import PrivateAttr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -18,42 +16,25 @@ class Settings(BaseSettings):
         if not v.lower().startswith("https://"):
             raise ValueError("oracle_base_url must use HTTPS to protect credentials in transit")
         return v
+
     reports_file: Path = Path("reports.txt")
-
     max_batch_size: int = 20
-    request_timeout: int = 120  # seconds per Oracle BIP call
-    http_pool_size: int = 10    # max connections in shared session pool
-    cache_ttl: int = 300        # seconds to cache report results; 0 = disabled
-
-    # GitHub — leave empty to disable auto-commit of downloaded reports
+    request_timeout: int = 120
+    http_pool_size: int = 10
+    cache_ttl: int = 300
     github_token: str = ""
-    github_repo: str = ""        # format: owner/repo
+    github_repo: str = ""
     github_branch: str = "main"
     github_reports_dir: str = "reports"
-
-    # File-age check: skip Oracle if a GitHub file is younger than this threshold
-    file_age_threshold_hours: float = 4.0
-
-    # Explicit XDO path for the receipt details report used by POST /reports/match.
-    # Falls back to the first "receipt"-named path in reports_file if left empty.
+    file_age_threshold_hours: float = 0.6
     receipt_report_path: str = ""
-
-    # Maximum number of entries in the in-memory report cache (LRU eviction).
     cache_maxsize: int = 128
-
-    # Comma-separated origins for CORS, or "*" for any.
-    # Empty string (default) disables cross-origin access entirely.
-    # Set to your frontend's origin in production (e.g. "https://reports.example.com").
     cors_origins: str = ""
-
     debug: bool = False
-
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
-
     _paths_cache: list[str] | None = PrivateAttr(default=None)
 
     def load_report_paths(self) -> list[str]:
-        """Read XDO paths from reports_file; skip blanks and `#` comments. Result is cached."""
         if self._paths_cache is None:
             self._paths_cache = self._read_report_paths()
         return self._paths_cache
@@ -64,11 +45,10 @@ class Settings(BaseSettings):
         return [
             line.strip()
             for line in self.reports_file.read_text().splitlines()
-            if line.strip() and not line.strip().startswith("#")
+            if line.strip() and (not line.strip().startswith("#"))
         ]
 
 
 @lru_cache
 def get_settings() -> Settings:
-    # Required fields are loaded from env / .env at runtime; mypy can't see that.
     return Settings()

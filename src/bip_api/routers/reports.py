@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import asyncio
 import csv
 import io
@@ -8,11 +7,9 @@ import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal
-
 import requests
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-
 from bip_api.cache import ParsedCSVCache, ReportCache
 from bip_api.client import fetch_report_csv, report_name, report_stem
 from bip_api.config import Settings, get_settings
@@ -31,8 +28,6 @@ from bip_api.models import (
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/reports", tags=["reports"])
-
-# Cache-tier ordering used for X-Cache header on ZIP responses.
 _CACHE_TIER: dict[str, int] = {"memory": 0, "github": 1, "oracle": 2}
 
 
@@ -40,7 +35,7 @@ _CACHE_TIER: dict[str, int] = {"memory": 0, "github": 1, "oracle": 2}
 class _FetchResult:
     filename: str
     csv_bytes: bytes
-    commit_to_github: bool  # True only when fetched fresh from Oracle
+    commit_to_github: bool
     source: Literal["memory", "github", "oracle"] = field(default="oracle")
 
 
@@ -61,13 +56,13 @@ def _get_parsed_csv_cache(request: Request) -> ParsedCSVCache:
 
 
 def _filter_by_receipt_number(csv_bytes: bytes, receipt_number: str) -> bytes:
-    """Return only rows whose RECEIPT_NUMBER column matches the given value."""
     text = csv_bytes.decode("utf-8", errors="replace")
     reader = csv.DictReader(io.StringIO(text))
     if reader.fieldnames is None:
         return csv_bytes
     matching = [
-        row for row in reader
+        row
+        for row in reader
         if row.get("RECEIPT_NUMBER", "").strip().lower() == receipt_number.strip().lower()
     ]
     out = io.StringIO()
@@ -78,8 +73,7 @@ def _filter_by_receipt_number(csv_bytes: bytes, receipt_number: str) -> bytes:
 
 
 async def _check_memory_cache(
-    item: DownloadRequest,
-    cache: ReportCache | None,
+    item: DownloadRequest, cache: ReportCache | None
 ) -> _FetchResult | None:
     if cache:
         hit = cache.get(item)
@@ -130,27 +124,13 @@ async def _fetch(
     github_session: requests.Session,
     cache: ReportCache | None,
 ) -> _FetchResult | AuthError | ReportError:
-    """
-    Fetch one report. Priority order:
-      1. In-memory cache       (filter-aware cache key)
-      2. GitHub file-age check (only for unfiltered Oracle requests)
-      3. Oracle SOAP fetch
-
-    receipt_number is a Python post-filter and does not affect which tier is used —
-    the full report is always fetched/cached, then filtered after.
-
-    Filtered Oracle requests (customer_name / from_date / to_date) bypass GitHub
-    on both read and write to prevent poisoning the unfiltered cache.
-    """
     result = await _check_memory_cache(item, cache)
     if result:
         return result
-
     if not item.has_filters:
         result = await _check_github_cache(item, settings, github_session, cache)
         if result:
             return result
-
     return await _fetch_from_oracle(item, settings, oracle_session, cache)
 
 
@@ -166,17 +146,15 @@ def _schedule_github_commit(
         )
 
 
-def _apply_receipt_filter(
-    outcome: _FetchResult,
-    receipt_number: str | None,
-) -> _FetchResult:
-    """Filter CSV rows by RECEIPT_NUMBER after fetching. Never commits filtered results."""
+def _apply_receipt_filter(outcome: _FetchResult, receipt_number: str | None) -> _FetchResult:
     if not receipt_number:
         return outcome
     filtered = _filter_by_receipt_number(outcome.csv_bytes, receipt_number)
     log.info(
         "Filtered by RECEIPT_NUMBER=%r: %d bytes → %d bytes",
-        receipt_number, len(outcome.csv_bytes), len(filtered),
+        receipt_number,
+        len(outcome.csv_bytes),
+        len(filtered),
     )
     return _FetchResult(
         filename=outcome.filename, csv_bytes=filtered, commit_to_github=False, source=outcome.source
@@ -185,7 +163,6 @@ def _apply_receipt_filter(
 
 @router.get("", response_model=ReportListResponse)
 async def list_reports(settings: Settings = Depends(get_settings)) -> ReportListResponse:
-    """List all reports configured in reports.txt."""
     items = [ReportItem(path=p, name=report_name(p)) for p in settings.load_report_paths()]
     return ReportListResponse(reports=items)
 
@@ -199,15 +176,6 @@ async def download(
     github_session: requests.Session = Depends(_get_github_session),
     cache: ReportCache | None = Depends(_get_cache),
 ) -> Response:
-    """
-    Download one or more reports.
-
-    Returns a CSV for a single report, a ZIP for multiple.
-    Fresh Oracle fetches are committed to GitHub in the background (if configured).
-
-    Oracle filters: customer_name, from_date, to_date (passed to SOAP).
-    Post-filter:    receipt_number (matched against RECEIPT_NUMBER column in CSV).
-    """
     if not req.reports:
         raise HTTPException(status_code=400, detail="No reports specified")
     if len(req.reports) > settings.max_batch_size:
@@ -215,25 +183,19 @@ async def download(
             status_code=400,
             detail=f"Batch size {len(req.reports)} exceeds limit of {settings.max_batch_size}",
         )
-
     outcomes = await asyncio.gather(
         *[_fetch(item, settings, oracle_session, github_session, cache) for item in req.reports]
     )
-
-    # Single report → return raw CSV
     if len(req.reports) == 1:
         outcome = outcomes[0]
         if isinstance(outcome, AuthError):
             raise HTTPException(status_code=401, detail=str(outcome))
         if isinstance(outcome, ReportError):
             raise HTTPException(status_code=502, detail=str(outcome))
-
         cache_source = outcome.source
         _schedule_github_commit(background_tasks, outcome, settings, github_session)
         outcome = _apply_receipt_filter(outcome, req.reports[0].receipt_number)
-        
         download_filename = f"{report_name(req.reports[0].report_path)}.csv"
-
         return Response(
             content=outcome.csv_bytes,
             media_type="text/csv",
@@ -243,13 +205,10 @@ async def download(
                 "X-Cache": cache_source,
             },
         )
-
-    # Multiple reports → bundle into a ZIP
     buf = io.BytesIO()
     fetch_errors: list[str] = []
     success_count = 0
     zip_sources: list[Literal["memory", "github", "oracle"]] = []
-
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for item, outcome in zip(req.reports, outcomes, strict=True):
             if isinstance(outcome, AuthError):
@@ -260,20 +219,14 @@ async def download(
                 zip_sources.append(outcome.source)
                 _schedule_github_commit(background_tasks, outcome, settings, github_session)
                 outcome = _apply_receipt_filter(outcome, item.receipt_number)
-                
                 download_filename = f"{report_name(item.report_path)}.csv"
                 zf.writestr(download_filename, outcome.csv_bytes)
                 success_count += 1
-
     if success_count == 0:
         raise HTTPException(status_code=502, detail="; ".join(fetch_errors))
-
     if fetch_errors:
         log.warning("%d/%d reports failed: %s", len(fetch_errors), len(req.reports), fetch_errors)
-
-    # X-Cache: report the highest-cost tier used across all successful fetches.
     zip_cache_source = max(zip_sources, key=lambda s: _CACHE_TIER[s])
-
     headers: dict[str, str] = {
         "Content-Disposition": 'attachment; filename="reports.zip"',
         "X-Succeeded-Count": str(success_count),
@@ -282,20 +235,14 @@ async def download(
     }
     if fetch_errors:
         headers["X-Failed-Reports"] = "; ".join(fetch_errors)
-
     buf.seek(0)
     return StreamingResponse(buf, media_type="application/zip", headers=headers)
 
 
-# ---------------------------------------------------------------------------
-# Match helpers
-# ---------------------------------------------------------------------------
-
-# Invoice Details Report column names (Oracle Fusion Receivables)
-_INV_NUMBER_COL = "TRANSACTION_NUMBER"   # Oracle internal transaction number → fusion_invoice_number
-_INV_DATE_COL = "TRANSACTION_DATE"       # → fusion_invoice_date
-_INV_AMOUNT_COL = "TOTAL_AMOUNTS"        # → fusion_invoice_amount
-_INV_DOC_NUMBER_COL = "DOCUMENT_NUMBER"  # customer-facing document number; used in Step 2
+_INV_NUMBER_COL = "TRANSACTION_NUMBER"
+_INV_DATE_COL = "TRANSACTION_DATE"
+_INV_AMOUNT_COL = "TOTAL_AMOUNTS"
+_INV_DOC_NUMBER_COL = "DOCUMENT_NUMBER"
 
 
 def _parse_csv_amount(val: str) -> float | None:
@@ -313,7 +260,6 @@ def _amounts_match(csv_val: str, expected: float | None) -> bool:
 
 
 def _convert_json_date(date_str: str | None) -> str | None:
-    """YYYY/MM/DD → DD-MM-YYYY (for comparing against CSV RECEIPT_DATE)."""
     if not date_str:
         return None
     try:
@@ -323,7 +269,6 @@ def _convert_json_date(date_str: str | None) -> str | None:
 
 
 def _convert_csv_date(date_str: str | None) -> str | None:
-    """DD-MM-YYYY (CSV) → YYYY/MM/DD (response format matching input)."""
     if not date_str:
         return None
     try:
@@ -332,82 +277,60 @@ def _convert_csv_date(date_str: str | None) -> str | None:
         return None
 
 
-def _match_receipt(
-    record: ReceiptRecord,
-    rows: list[dict[str, str]],
-) -> dict[str, str] | None:
-    """
-    Return the single matching receipt row, or None.
-
-    Step 1 (payment_reference present): RECEIPT_NUMBER + RECEIPT_AMOUNT (exact).
-    Step 2 (payment_reference absent):  RECEIPT_DATE + BILL_CUSTOMER_NAME + RECEIPT_AMOUNT (exact).
-    Exactly one hit required; zero or multiple → None.
-    """
+def _match_receipt(record: ReceiptRecord, rows: list[dict[str, str]]) -> dict[str, str] | None:
     if record.payment_reference:
         hits = [
-            r for r in rows
-            if r.get("RECEIPT_NUMBER", "").strip().lower() == record.payment_reference.strip().lower()
+            r
+            for r in rows
+            if r.get("RECEIPT_NUMBER", "").strip().lower()
+            == record.payment_reference.strip().lower()
             and _amounts_match(r.get("RECEIPT_AMOUNT", ""), record.total_amount)
         ]
     else:
         expected_date = _convert_json_date(record.payment_date)
         hits = [
-            r for r in rows
-            if r.get("BILL_CUSTOMER_NAME", "").strip().lower() == record.customer_name.strip().lower()
+            r
+            for r in rows
+            if r.get("BILL_CUSTOMER_NAME", "").strip().lower()
+            == record.customer_name.strip().lower()
             and (not expected_date or r.get("RECEIPT_DATE", "").strip() == expected_date)
             and _amounts_match(r.get("RECEIPT_AMOUNT", ""), record.total_amount)
         ]
     return hits[0] if len(hits) == 1 else None
 
 
-def _match_invoice_item(
-    inv: InvoiceItem,
-    invoice_rows: list[dict[str, str]],
-) -> FusedInvoiceItem:
-    """
-    Run 3-step invoice matching for one invoice item. Stop at first step that
-    yields exactly one hit; set fusion fields to null if no step matches.
-
-    Step 1: input invoice_number == TRANSACTION_NUMBER + invoice_date (exact).
-    Step 2: input customer_invoice_number == DOCUMENT_NUMBER + invoice_date (exact).
-    Step 3: input invoice_number is substring of TRANSACTION_NUMBER + invoice_date (exact).
-    """
+def _match_invoice_item(inv: InvoiceItem, invoice_rows: list[dict[str, str]]) -> FusedInvoiceItem:
     inv_num = inv.invoice_number.strip().lower()
     converted_date = _convert_json_date(inv.invoice_date)
     inv_date = (converted_date or "").strip().lower()
     cust_inv_num = (inv.customer_invoice_number or "").strip().lower()
-
     matched_row: dict[str, str] | None = None
-
-    # Step 1: exact invoice_number + invoice_date
     hits = [
-        r for r in invoice_rows
+        r
+        for r in invoice_rows
         if r.get(_INV_NUMBER_COL, "").strip().lower() == inv_num
         and (not inv_date or r.get(_INV_DATE_COL, "").strip().lower() == inv_date)
     ]
     if len(hits) == 1:
         matched_row = hits[0]
-
-    # Step 2: input customer_invoice_number == report DOCUMENT_NUMBER + invoice_date
     if matched_row is None and cust_inv_num:
         hits = [
-            r for r in invoice_rows
+            r
+            for r in invoice_rows
             if r.get(_INV_DOC_NUMBER_COL, "").strip().lower() == cust_inv_num
             and (not inv_date or r.get(_INV_DATE_COL, "").strip().lower() == inv_date)
         ]
         if len(hits) == 1:
             matched_row = hits[0]
-
-    # Step 3: invoice_number as substring of report invoice_number + invoice_date
     if matched_row is None and inv_num:
         hits = [
-            r for r in invoice_rows
+            r
+            for r in invoice_rows
             if inv_num in r.get(_INV_NUMBER_COL, "").strip().lower()
             and (not inv_date or r.get(_INV_DATE_COL, "").strip().lower() == inv_date)
         ]
         if len(hits) == 1:
             matched_row = hits[0]
-
     base = FusedInvoiceItem(
         invoice_number=inv.invoice_number,
         invoice_date=inv.invoice_date,
@@ -418,7 +341,6 @@ def _match_invoice_item(
     )
     if matched_row is None:
         return base
-
     return FusedInvoiceItem(
         invoice_number=inv.invoice_number,
         fusion_invoice_number=matched_row.get(_INV_NUMBER_COL, "").strip() or None,
@@ -446,17 +368,21 @@ def _match_record(
         if invoice_filename and invoice_bytes is not None
         else []
     )
-
     matched_row = _match_receipt(record, receipt_rows)
     fused_invoices = [_match_invoice_item(inv, invoice_rows) for inv in record.invoices]
-
     return MatchedRecord(
         customer_name=record.customer_name,
-        fusion_customer_name=matched_row.get("BILL_CUSTOMER_NAME", "").strip() or None if matched_row else None,
+        fusion_customer_name=matched_row.get("BILL_CUSTOMER_NAME", "").strip() or None
+        if matched_row
+        else None,
         payment_reference=record.payment_reference,
-        fusion_receipt_number=matched_row.get("RECEIPT_NUMBER", "").strip() or None if matched_row else None,
+        fusion_receipt_number=matched_row.get("RECEIPT_NUMBER", "").strip() or None
+        if matched_row
+        else None,
         payment_date=record.payment_date,
-        fusion_receipt_date=_convert_csv_date(matched_row.get("RECEIPT_DATE", "").strip()) if matched_row else None,
+        fusion_receipt_date=_convert_csv_date(matched_row.get("RECEIPT_DATE", "").strip())
+        if matched_row
+        else None,
         invoices=fused_invoices,
         total_amount=record.total_amount,
         confidence_score=record.confidence_score,
@@ -476,57 +402,28 @@ async def match_record(
     cache: ReportCache | None = Depends(_get_cache),
     parsed_cache: ParsedCSVCache = Depends(_get_parsed_csv_cache),
 ) -> JSONResponse:
-    """
-    Match a single JSON payment record against the Receipt and Invoice Details
-    Reports and return the enriched record with fusion_* fields populated.
-
-    Both reports are fetched concurrently via the 3-tier cache (memory →
-    GitHub file-age → Oracle SOAP). Each is re-fetched from Oracle only when
-    the cached copy is older than FILE_AGE_THRESHOLD_HOURS (default 4h).
-
-    Receipt matching:
-      Step 1 (payment_reference present): RECEIPT_NUMBER + RECEIPT_AMOUNT (exact).
-      Step 2 (payment_reference absent):  RECEIPT_DATE + BILL_CUSTOMER_NAME + RECEIPT_AMOUNT (exact).
-      Exactly one hit required; zero or multiple → fusion_receipt_number = null.
-
-    Invoice matching (per invoice item, steps run in order, first exact hit wins):
-      Step 1: invoice_number + invoice_date (exact).
-      Step 2: customer_invoice_number == report invoice_number + invoice_date (exact).
-      Step 3: invoice_number substring of report invoice_number + invoice_date (exact).
-      Zero or multiple hits at any step → fusion invoice fields = null.
-    """
     all_paths = settings.load_report_paths()
-
     receipt_path = settings.receipt_report_path or next(
         (p for p in all_paths if "receipt" in p.lower()), None
     )
     if not receipt_path:
         raise HTTPException(
             status_code=500,
-            detail=(
-                "No receipt report path configured. "
-                "Set RECEIPT_REPORT_PATH or add one to reports.txt."
-            ),
+            detail="No receipt report path configured. Set RECEIPT_REPORT_PATH or add one to reports.txt.",
         )
-
     invoice_path = next(
         (p for p in all_paths if "invoice" in p.lower() and p != receipt_path), None
     )
-
-    # Fetch only the two reports this endpoint actually needs.
     fetch_paths = [receipt_path] + ([invoice_path] if invoice_path else [])
     items = [DownloadRequest(report_path=p) for p in fetch_paths]
     outcomes = await asyncio.gather(
         *[_fetch(item, settings, oracle_session, github_session, cache) for item in items]
     )
-
     receipt_outcome = outcomes[0]
     if isinstance(receipt_outcome, AuthError):
         raise HTTPException(status_code=401, detail=str(receipt_outcome))
     if isinstance(receipt_outcome, ReportError):
         raise HTTPException(status_code=502, detail=str(receipt_outcome))
-
-    # Resolve invoice outcome (non-fatal if missing or failed).
     invoice_outcome: _FetchResult | None = None
     if invoice_path:
         inv_result = outcomes[1]
@@ -534,12 +431,9 @@ async def match_record(
             log.warning("Failed to fetch invoice report %s: %s", invoice_path, inv_result)
         else:
             invoice_outcome = inv_result
-
-    # Schedule GitHub commits for freshly fetched reports.
     for outcome in outcomes:
         if not isinstance(outcome, (AuthError, ReportError)):
             _schedule_github_commit(background_tasks, outcome, settings, github_session)
-
     matched = _match_record(
         record,
         receipt_outcome.filename,

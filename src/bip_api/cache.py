@@ -1,12 +1,10 @@
 from __future__ import annotations
-
 import csv
 import io
 import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
-
 from bip_api.models import DownloadRequest
 
 
@@ -14,12 +12,10 @@ from bip_api.models import DownloadRequest
 class _Entry:
     filename: str
     data: bytes
-    expires_at: float  # monotonic clock
+    expires_at: float
 
 
 class ReportCache:
-    """Thread-safe in-memory LRU cache with per-entry TTL."""
-
     def __init__(self, ttl_seconds: int, maxsize: int = 128) -> None:
         self._ttl = ttl_seconds
         self._maxsize = maxsize
@@ -39,7 +35,7 @@ class ReportCache:
                 del self._store[key]
                 return None
             self._store.move_to_end(key)
-            return entry.filename, entry.data
+            return (entry.filename, entry.data)
 
     def set(self, req: DownloadRequest, filename: str, data: bytes) -> None:
         key = self._key(req)
@@ -47,22 +43,13 @@ class ReportCache:
             if key in self._store:
                 self._store.move_to_end(key)
             self._store[key] = _Entry(
-                filename=filename,
-                data=data,
-                expires_at=time.monotonic() + self._ttl,
+                filename=filename, data=data, expires_at=time.monotonic() + self._ttl
             )
             while len(self._store) > self._maxsize:
                 self._store.popitem(last=False)
 
 
 class ParsedCSVCache:
-    """LRU cache for parsed CSV rows, keyed by filename.
-
-    Filenames embed a timestamp, so a fresh Oracle fetch naturally produces a
-    new key and the old entry is evicted via LRU rather than stale data being
-    served. Multiple reports can coexist up to maxsize entries.
-    """
-
     def __init__(self, maxsize: int = 8) -> None:
         self._lock = threading.Lock()
         self._store: OrderedDict[str, list[dict[str, str]]] = OrderedDict()

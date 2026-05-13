@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import json
 import logging
 import os
@@ -7,11 +6,9 @@ import time
 import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-
 import uvicorn
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-
 from bip_api import __version__
 from bip_api.cache import ParsedCSVCache, ReportCache
 from bip_api.client import make_github_session, make_oracle_session
@@ -38,7 +35,6 @@ class _JsonFormatter(logging.Formatter):
 def _configure_logging(debug: bool) -> None:
     handler = logging.StreamHandler()
     handler.setFormatter(_JsonFormatter())
-    # Only configure the bip_api logger so we don't interfere with uvicorn's handlers.
     pkg_logger = logging.getLogger("bip_api")
     pkg_logger.handlers = [handler]
     pkg_logger.setLevel(logging.DEBUG if debug else logging.INFO)
@@ -58,14 +54,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         else None
     )
     app.state.parsed_csv_cache = ParsedCSVCache()
-
-    log.info(
-        "Started: pool_size=%d cache_ttl=%ds",
-        settings.http_pool_size,
-        settings.cache_ttl,
-    )
+    log.info("Started: pool_size=%d cache_ttl=%ds", settings.http_pool_size, settings.cache_ttl)
     yield
-
     oracle_session.close()
     github_session.close()
     log.info("Stopped")
@@ -74,27 +64,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 def create_app() -> FastAPI:
     settings = get_settings()
     _configure_logging(settings.debug)
-
     application = FastAPI(
         title="BIP Downloader API",
         description="FastAPI service for downloading Oracle BI Publisher reports via SOAP",
         version=__version__,
         lifespan=lifespan,
-        # Hide docs in production unless debug is on
         docs_url="/docs",
         redoc_url="/redoc",
     )
-
     origins = (
         ["*"]
         if settings.cors_origins.strip() == "*"
         else [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
     )
     application.add_middleware(
-        CORSMiddleware,
-        allow_origins=origins,
-        allow_methods=["GET", "POST"],
-        allow_headers=["*"],
+        CORSMiddleware, allow_origins=origins, allow_methods=["GET", "POST"], allow_headers=["*"]
     )
 
     @application.middleware("http")
