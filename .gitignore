@@ -10,3 +10,4 @@ venv/
 reports/
 dist/
 *.egg-info/
+JSON Records/
