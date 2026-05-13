@@ -1,13 +1,16 @@
 from __future__ import annotations
+
 import io
 import time
 import zipfile
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import MagicMock, patch
-from typing import Iterator
+
 import pytest
 import requests
 from fastapi.testclient import TestClient
+
 from bip_api.cache import ReportCache
 from bip_api.client import fetch_report_csv
 from bip_api.config import Settings, get_settings
@@ -206,7 +209,7 @@ def test_fetch_report_csv_sanitizes_soap_fault() -> None:
     response = MagicMock()
     response.status_code = 200
     response.ok = True
-    response.text = "<soapenv:Envelope><faultstring>java.io.FileNotFoundException: /opt/oracle/internal/path</faultstring></soapenv:Envelope>"
+    response.text = "<soapenv:Envelope><faultstring>java.io.FileNotFoundException: /opt/oracle/internal/path</faultstring></soapenv:Envelope>"  # noqa: E501
     session.post.return_value = response
     req = DownloadRequest(report_path="/Custom/X.xdo")
     with pytest.raises(ReportError) as exc:
@@ -302,6 +305,7 @@ def test_x_cache_zip_uses_highest_cost_tier(mock_fetch: MagicMock, client: TestC
 
 def test_github_cache_ignores_files_with_longer_stem() -> None:
     from unittest.mock import MagicMock
+
     from bip_api.github import get_latest_report_from_github
 
     settings = Settings(
@@ -381,7 +385,7 @@ def test_download_non_utf8_csv_does_not_crash(mock_fetch: MagicMock, client: Tes
     assert "text/csv" in resp.headers["content-type"]
 
 
-RECEIPT_CSV = "BILL_CUSTOMER_NAME,RECEIPT_NUMBER,RECEIPT_DATE,RECEIPT_AMOUNT\nAcme Corp,REC001,15-01-2024,1000.00\nAcme Corp,REC002,20-01-2024,500.50\nOther Co,REC003,10-02-2024,250.00\n"
+RECEIPT_CSV = "BILL_CUSTOMER_NAME,RECEIPT_NUMBER,RECEIPT_DATE,RECEIPT_AMOUNT\nAcme Corp,REC001,15-01-2024,1000.00\nAcme Corp,REC002,20-01-2024,500.50\nOther Co,REC003,10-02-2024,250.00\n"  # noqa: E501
 MATCH_SETTINGS = Settings(
     oracle_username="testuser",
     oracle_password="testpass",
@@ -473,7 +477,7 @@ def test_match_no_match_returns_nulls(mock_fetch: MagicMock, match_client: TestC
 
 @patch("bip_api.routers.reports.fetch_report_csv")
 def test_match_ambiguous_returns_nulls(mock_fetch: MagicMock, match_client: TestClient) -> None:
-    ambiguous_csv = "BILL_CUSTOMER_NAME,RECEIPT_NUMBER,RECEIPT_DATE,RECEIPT_AMOUNT\nAcme Corp,REC-A,15-01-2024,1000.00\nAcme Corp,REC-B,15-01-2024,1000.00\n"
+    ambiguous_csv = "BILL_CUSTOMER_NAME,RECEIPT_NUMBER,RECEIPT_DATE,RECEIPT_AMOUNT\nAcme Corp,REC-A,15-01-2024,1000.00\nAcme Corp,REC-B,15-01-2024,1000.00\n"  # noqa: E501
     mock_fetch.return_value = ("Receipt_Details_20240115_130000.csv", ambiguous_csv.encode())
     resp = match_client.post(
         "/reports/match",
@@ -488,7 +492,7 @@ def test_match_ambiguous_returns_nulls(mock_fetch: MagicMock, match_client: Test
     assert resp.json()["fusion_receipt_number"] is None
 
 
-INVOICE_CSV = "TRANSACTION_NUMBER,TRANSACTION_DATE,TOTAL_AMOUNTS,DOCUMENT_NUMBER\nINV-001,15-01-2024,500.00,INV-001\n126125908454,20-01-2024,750.00,DOC-002\n6153004273089,22-01-2024,300.00,DOC-003\n"
+INVOICE_CSV = "TRANSACTION_NUMBER,TRANSACTION_DATE,TOTAL_AMOUNTS,DOCUMENT_NUMBER\nINV-001,15-01-2024,500.00,INV-001\n126125908454,20-01-2024,750.00,DOC-002\n6153004273089,22-01-2024,300.00,DOC-003\n"  # noqa: E501
 MATCH_WITH_INVOICE_SETTINGS = Settings(
     oracle_username="testuser",
     oracle_password="testpass",
@@ -597,7 +601,7 @@ def test_invoice_match_step3_substring(
 def test_invoice_match_ambiguous_returns_nulls(
     mock_fetch: MagicMock, invoice_match_client: TestClient
 ) -> None:
-    ambiguous_inv_csv = "TRANSACTION_NUMBER,TRANSACTION_DATE,TOTAL_AMOUNTS,DOCUMENT_NUMBER\n126125908454,20-01-2024,750.00,DOC-A\n999125908454,20-01-2024,200.00,DOC-B\n"
+    ambiguous_inv_csv = "TRANSACTION_NUMBER,TRANSACTION_DATE,TOTAL_AMOUNTS,DOCUMENT_NUMBER\n126125908454,20-01-2024,750.00,DOC-A\n999125908454,20-01-2024,200.00,DOC-B\n"  # noqa: E501
     mock_fetch.side_effect = [
         ("Receipt_Details_20240115_120000.csv", RECEIPT_CSV.encode()),
         ("Invoice_Details_20240115_120003.csv", ambiguous_inv_csv.encode()),
@@ -709,7 +713,7 @@ def test_invoice_match_step2_case_insensitive(
 def test_invoice_match_step3_substring_case_insensitive(
     mock_fetch: MagicMock, invoice_match_client: TestClient
 ) -> None:
-    upper_inv_csv = "TRANSACTION_NUMBER,TRANSACTION_DATE,TOTAL_AMOUNTS,DOCUMENT_NUMBER\nABCDEF123456,20-01-2024,750.00,DOC-001\n"
+    upper_inv_csv = "TRANSACTION_NUMBER,TRANSACTION_DATE,TOTAL_AMOUNTS,DOCUMENT_NUMBER\nABCDEF123456,20-01-2024,750.00,DOC-001\n"  # noqa: E501
     mock_fetch.side_effect = [
         ("Receipt_Details_20240115_120000.csv", RECEIPT_CSV.encode()),
         ("Invoice_Details_20240115_120012.csv", upper_inv_csv.encode()),

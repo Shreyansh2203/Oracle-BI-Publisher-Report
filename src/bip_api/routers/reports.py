@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import asyncio
 import csv
 import io
@@ -7,9 +8,11 @@ import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal
+
 import requests
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+
 from bip_api.cache import ParsedCSVCache, ReportCache
 from bip_api.client import fetch_report_csv, report_name, report_stem
 from bip_api.config import Settings, get_settings
@@ -409,7 +412,7 @@ async def match_record(
     if not receipt_path:
         raise HTTPException(
             status_code=500,
-            detail="No receipt report path configured. Set RECEIPT_REPORT_PATH or add one to reports.txt.",
+            detail="No receipt report path configured. Set RECEIPT_REPORT_PATH or add one to reports.txt.",  # noqa: E501
         )
     invoice_path = next(
         (p for p in all_paths if "invoice" in p.lower() and p != receipt_path), None

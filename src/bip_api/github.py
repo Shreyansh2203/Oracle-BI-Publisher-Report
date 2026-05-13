@@ -1,10 +1,13 @@
 from __future__ import annotations
+
 import base64
 import logging
 import re
 import time
 from datetime import UTC, datetime
+
 import requests
+
 from bip_api.config import Settings
 
 log = logging.getLogger(__name__)
@@ -85,7 +88,7 @@ def _cleanup_old_reports(
         sha = f.get("sha")
         if not sha:
             continue
-        del_url = f"{_API_BASE}/repos/{settings.github_repo}/contents/{settings.github_reports_dir}/{name}"
+        del_url = f"{_API_BASE}/repos/{settings.github_repo}/contents/{settings.github_reports_dir}/{name}"  # noqa: E501
         del_resp = session.delete(
             del_url,
             json={

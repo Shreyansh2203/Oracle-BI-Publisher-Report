@@ -1,10 +1,12 @@
 from __future__ import annotations
+
 import csv
 import io
 import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
+
 from bip_api.models import DownloadRequest
 
 

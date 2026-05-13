@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
@@ -40,7 +42,7 @@ class DownloadRequest(BaseModel):
             try:
                 datetime.strptime(v, "%d-%m-%Y")
             except ValueError:
-                raise ValueError("Date must be in DD-MM-YYYY format (e.g. 31-01-2024)")
+                raise ValueError("Date must be in DD-MM-YYYY format (e.g. 31-01-2024)") from None
         return v
 
     @property

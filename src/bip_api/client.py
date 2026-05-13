@@ -1,13 +1,16 @@
 from __future__ import annotations
+
 import base64
 import logging
 import re
 import textwrap
 from datetime import UTC, datetime
 from xml.sax.saxutils import escape as xml_escape
+
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+
 from bip_api.config import Settings
 from bip_api.exceptions import AuthError, ReportError
 from bip_api.models import DownloadRequest
@@ -24,13 +27,13 @@ _RE_REPORT_BYTES = re.compile("<reportBytes>(.*?)</reportBytes>", re.DOTALL)
 def _build_envelope(req: DownloadRequest, username: str, password: str) -> str:
     params = ""
     if req.customer_name:
-        params += f"<pub:item><pub:name>P_CUSTOMER_NAME</pub:name><pub:values><pub:item>{xml_escape(req.customer_name)}</pub:item></pub:values></pub:item>"
+        params += f"<pub:item><pub:name>P_CUSTOMER_NAME</pub:name><pub:values><pub:item>{xml_escape(req.customer_name)}</pub:item></pub:values></pub:item>"  # noqa: E501
     if req.from_date:
-        params += f"<pub:item><pub:name>P_FROM_DATE</pub:name><pub:values><pub:item>{xml_escape(req.from_date)}</pub:item></pub:values></pub:item>"
+        params += f"<pub:item><pub:name>P_FROM_DATE</pub:name><pub:values><pub:item>{xml_escape(req.from_date)}</pub:item></pub:values></pub:item>"  # noqa: E501
     if req.to_date:
-        params += f"<pub:item><pub:name>P_TO_DATE</pub:name><pub:values><pub:item>{xml_escape(req.to_date)}</pub:item></pub:values></pub:item>"
+        params += f"<pub:item><pub:name>P_TO_DATE</pub:name><pub:values><pub:item>{xml_escape(req.to_date)}</pub:item></pub:values></pub:item>"  # noqa: E501
     return textwrap.dedent(
-        f'        <?xml version="1.0" encoding="utf-8"?>\n        <soapenv:Envelope\n            xmlns:soapenv="{_ENVELOPE_NS}"\n            xmlns:pub="{_SOAP_NS}">\n          <soapenv:Header/>\n          <soapenv:Body>\n            <pub:runReport>\n              <pub:userID>{xml_escape(username)}</pub:userID>\n              <pub:password>{xml_escape(password)}</pub:password>\n              <pub:reportRequest>\n                <pub:reportAbsolutePath>{xml_escape(req.report_path)}</pub:reportAbsolutePath>\n                <pub:sizeOfDataChunkDownload>-1</pub:sizeOfDataChunkDownload>\n                <pub:parameterNameValues>\n                  {params}\n                </pub:parameterNameValues>\n                <pub:attributeFormat>csv</pub:attributeFormat>\n              </pub:reportRequest>\n            </pub:runReport>\n          </soapenv:Body>\n        </soapenv:Envelope>\n    '
+        f'        <?xml version="1.0" encoding="utf-8"?>\n        <soapenv:Envelope\n            xmlns:soapenv="{_ENVELOPE_NS}"\n            xmlns:pub="{_SOAP_NS}">\n          <soapenv:Header/>\n          <soapenv:Body>\n            <pub:runReport>\n              <pub:userID>{xml_escape(username)}</pub:userID>\n              <pub:password>{xml_escape(password)}</pub:password>\n              <pub:reportRequest>\n                <pub:reportAbsolutePath>{xml_escape(req.report_path)}</pub:reportAbsolutePath>\n                <pub:sizeOfDataChunkDownload>-1</pub:sizeOfDataChunkDownload>\n                <pub:parameterNameValues>\n                  {params}\n                </pub:parameterNameValues>\n                <pub:attributeFormat>csv</pub:attributeFormat>\n              </pub:reportRequest>\n            </pub:runReport>\n          </soapenv:Body>\n        </soapenv:Envelope>\n    '  # noqa: E501
     )
 
 
