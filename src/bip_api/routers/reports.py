@@ -75,7 +75,7 @@ def _filter_by_receipt_number(csv_bytes: bytes, receipt_number: str) -> bytes:
     return out.getvalue().encode("utf-8")
 
 
-async def _check_memory_cache(
+def _check_memory_cache(
     item: DownloadRequest, cache: ReportCache | None
 ) -> _FetchResult | None:
     if cache:
@@ -127,7 +127,7 @@ async def _fetch(
     github_session: requests.Session,
     cache: ReportCache | None,
 ) -> _FetchResult | AuthError | ReportError:
-    result = await _check_memory_cache(item, cache)
+    result = _check_memory_cache(item, cache)
     if result:
         return result
     if not item.has_filters:
@@ -246,6 +246,7 @@ _INV_NUMBER_COL = "TRANSACTION_NUMBER"
 _INV_DATE_COL = "TRANSACTION_DATE"
 _INV_AMOUNT_COL = "TOTAL_AMOUNTS"
 _INV_DOC_NUMBER_COL = "DOCUMENT_NUMBER"
+_AMOUNT_TOLERANCE = 0.005  # half-cent tolerance for floating-point currency comparisons
 
 
 def _parse_csv_amount(val: str) -> float | None:
@@ -259,7 +260,7 @@ def _amounts_match(csv_val: str, expected: float | None) -> bool:
     if expected is None:
         return True
     parsed = _parse_csv_amount(csv_val)
-    return parsed is not None and abs(parsed - expected) < 0.005
+    return parsed is not None and abs(parsed - expected) < _AMOUNT_TOLERANCE
 
 
 def _convert_json_date(date_str: str | None) -> str | None:
@@ -291,14 +292,14 @@ def _match_receipt(record: ReceiptRecord, rows: list[dict[str, str]]) -> dict[st
         ]
     else:
         expected_date = _convert_json_date(record.payment_date)
+        customer = (record.customer_name or "").strip().lower()
         hits = [
             r
             for r in rows
-            if r.get("BILL_CUSTOMER_NAME", "").strip().lower()
-            == record.customer_name.strip().lower()
+            if r.get("BILL_CUSTOMER_NAME", "").strip().lower() == customer
             and (not expected_date or r.get("RECEIPT_DATE", "").strip() == expected_date)
             and _amounts_match(r.get("RECEIPT_AMOUNT", ""), record.total_amount)
-        ]
+        ] if customer else []
     return hits[0] if len(hits) == 1 else None
 
 
@@ -325,6 +326,11 @@ def _match_invoice_item(inv: InvoiceItem, invoice_rows: list[dict[str, str]]) ->
         ]
         if len(hits) == 1:
             matched_row = hits[0]
+            log.debug(
+                "Invoice %r matched via customer_invoice_number %r",
+                inv.invoice_number,
+                cust_inv_num,
+            )
     if matched_row is None and inv_num:
         hits = [
             r
@@ -334,17 +340,20 @@ def _match_invoice_item(inv: InvoiceItem, invoice_rows: list[dict[str, str]]) ->
         ]
         if len(hits) == 1:
             matched_row = hits[0]
-    base = FusedInvoiceItem(
-        invoice_number=inv.invoice_number,
-        invoice_date=inv.invoice_date,
-        invoice_amount=inv.invoice_amount,
-        description=inv.description,
-        customer_invoice_number=inv.customer_invoice_number,
-        store_no=inv.store_no,
-    )
+            log.debug("Invoice %r matched via substring fallback", inv.invoice_number)
     if matched_row is None:
-        return base
+        log.debug("Invoice %r: no match found in %d rows", inv.invoice_number, len(invoice_rows))
+        return FusedInvoiceItem(
+            line_id=inv.line_id,
+            invoice_number=inv.invoice_number,
+            invoice_date=inv.invoice_date,
+            invoice_amount=inv.invoice_amount,
+            description=inv.description,
+            customer_invoice_number=inv.customer_invoice_number,
+            store_no=inv.store_no,
+        )
     return FusedInvoiceItem(
+        line_id=inv.line_id,
         invoice_number=inv.invoice_number,
         fusion_invoice_number=matched_row.get(_INV_NUMBER_COL, "").strip() or None,
         invoice_date=inv.invoice_date,
@@ -386,6 +395,7 @@ def _match_record(
         fusion_receipt_date=_convert_csv_date(matched_row.get("RECEIPT_DATE", "").strip())
         if matched_row
         else None,
+        header_id=record.header_id,
         invoices=fused_invoices,
         total_amount=record.total_amount,
         confidence_score=record.confidence_score,

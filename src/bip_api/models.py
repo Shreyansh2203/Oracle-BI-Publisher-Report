@@ -87,6 +87,7 @@ class HealthResponse(BaseModel):
 
 class InvoiceItem(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
+    line_id: int | None = Field(None, alias="Line_ID")
     invoice_number: str
     invoice_date: str | None = None
     invoice_amount: float | None = None
@@ -100,8 +101,9 @@ class ReceiptRecord(BaseModel):
     customer_name: str
     payment_reference: str | None = None
     payment_date: str | None = None
-    total_amount: float | None = None
+    header_id: int | None = None
     invoices: list[InvoiceItem] = []
+    total_amount: float | None = None
     confidence_score: float | None = None
     confidence_label: str | None = None
     invoice_count: int | None = None
@@ -110,6 +112,7 @@ class ReceiptRecord(BaseModel):
 
 class FusedInvoiceItem(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
+    line_id: int | None = Field(None, alias="Line_ID")
     invoice_number: str
     fusion_invoice_number: str | None = None
     invoice_date: str | None = None
@@ -129,6 +132,7 @@ class MatchedRecord(BaseModel):
     fusion_receipt_number: str | None = None
     payment_date: str | None = None
     fusion_receipt_date: str | None = None
+    header_id: int | None = None
     invoices: list[FusedInvoiceItem] = []
     total_amount: float | None = None
     confidence_score: float | None = None

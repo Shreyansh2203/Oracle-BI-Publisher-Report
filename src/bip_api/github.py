@@ -83,7 +83,7 @@ def _cleanup_old_reports(
         if not isinstance(f, dict):
             continue
         name = f.get("name", "")
-        if name == new_filename or not name.startswith(stem) or (not name.endswith(".csv")):
+        if name == new_filename or not name.startswith(stem + "_") or not name.endswith(".csv"):
             continue
         sha = f.get("sha")
         if not sha:

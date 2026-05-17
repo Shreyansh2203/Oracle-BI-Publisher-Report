@@ -32,9 +32,28 @@ def _build_envelope(req: DownloadRequest, username: str, password: str) -> str:
         params += f"<pub:item><pub:name>P_FROM_DATE</pub:name><pub:values><pub:item>{xml_escape(req.from_date)}</pub:item></pub:values></pub:item>"  # noqa: E501
     if req.to_date:
         params += f"<pub:item><pub:name>P_TO_DATE</pub:name><pub:values><pub:item>{xml_escape(req.to_date)}</pub:item></pub:values></pub:item>"  # noqa: E501
-    return textwrap.dedent(
-        f'        <?xml version="1.0" encoding="utf-8"?>\n        <soapenv:Envelope\n            xmlns:soapenv="{_ENVELOPE_NS}"\n            xmlns:pub="{_SOAP_NS}">\n          <soapenv:Header/>\n          <soapenv:Body>\n            <pub:runReport>\n              <pub:userID>{xml_escape(username)}</pub:userID>\n              <pub:password>{xml_escape(password)}</pub:password>\n              <pub:reportRequest>\n                <pub:reportAbsolutePath>{xml_escape(req.report_path)}</pub:reportAbsolutePath>\n                <pub:sizeOfDataChunkDownload>-1</pub:sizeOfDataChunkDownload>\n                <pub:parameterNameValues>\n                  {params}\n                </pub:parameterNameValues>\n                <pub:attributeFormat>csv</pub:attributeFormat>\n              </pub:reportRequest>\n            </pub:runReport>\n          </soapenv:Body>\n        </soapenv:Envelope>\n    '  # noqa: E501
-    )
+    return textwrap.dedent(f"""\
+        <?xml version="1.0" encoding="utf-8"?>
+        <soapenv:Envelope
+            xmlns:soapenv="{_ENVELOPE_NS}"
+            xmlns:pub="{_SOAP_NS}">
+          <soapenv:Header/>
+          <soapenv:Body>
+            <pub:runReport>
+              <pub:userID>{xml_escape(username)}</pub:userID>
+              <pub:password>{xml_escape(password)}</pub:password>
+              <pub:reportRequest>
+                <pub:reportAbsolutePath>{xml_escape(req.report_path)}</pub:reportAbsolutePath>
+                <pub:sizeOfDataChunkDownload>-1</pub:sizeOfDataChunkDownload>
+                <pub:parameterNameValues>
+                  {params}
+                </pub:parameterNameValues>
+                <pub:attributeFormat>csv</pub:attributeFormat>
+              </pub:reportRequest>
+            </pub:runReport>
+          </soapenv:Body>
+        </soapenv:Envelope>
+        """)
 
 
 def make_oracle_session(pool_size: int = 10) -> requests.Session:
@@ -70,7 +89,7 @@ def report_name(report_path: str) -> str:
 
 def report_stem(report_path: str) -> str:
     raw = report_name(report_path).replace(" ", "_")
-    return re.sub("[^\\w\\-]", "", raw)
+    return re.sub(r"[^\w-]", "", raw)
 
 
 def fetch_report_csv(
