@@ -263,13 +263,18 @@ def _amounts_match(csv_val: str, expected: float | None) -> bool:
     return parsed is not None and abs(parsed - expected) < _AMOUNT_TOLERANCE
 
 
+_DATE_INPUT_FORMATS = ("%Y/%m/%d", "%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y")
+
+
 def _convert_json_date(date_str: str | None) -> str | None:
     if not date_str:
         return None
-    try:
-        return datetime.strptime(date_str, "%Y/%m/%d").strftime("%d-%m-%Y")
-    except ValueError:
-        return None
+    for fmt in _DATE_INPUT_FORMATS:
+        try:
+            return datetime.strptime(date_str, fmt).strftime("%d-%m-%Y")
+        except ValueError:
+            continue
+    return None
 
 
 def _convert_csv_date(date_str: str | None) -> str | None:
