@@ -13,7 +13,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from bip_api import __version__
-from bip_api.cache import ParsedCSVCache, ReportCache
+from bip_api.cache import ReportCache
 from bip_api.client import make_github_session, make_oracle_session
 from bip_api.config import get_settings
 from bip_api.models import HealthResponse
@@ -56,7 +56,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         if settings.cache_ttl > 0
         else None
     )
-    app.state.parsed_csv_cache = ParsedCSVCache()
     log.info("Started: pool_size=%d cache_ttl=%ds", settings.http_pool_size, settings.cache_ttl)
     yield
     oracle_session.close()

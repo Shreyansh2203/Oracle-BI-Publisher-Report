@@ -29,7 +29,6 @@ class Settings(BaseSettings):
     github_branch: str = "main"
     github_reports_dir: str = "reports"
     file_age_threshold_hours: float = 0.6
-    receipt_report_path: str = ""
     cache_maxsize: int = 128
     cors_origins: str = ""
     debug: bool = False
