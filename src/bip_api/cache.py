@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+import io
 import threading
 import time
 from collections import OrderedDict
@@ -49,3 +51,19 @@ class ReportCache:
                 self._store.popitem(last=False)
 
 
+class ParsedCSVCache:
+    def __init__(self, maxsize: int = 8) -> None:
+        self._lock = threading.Lock()
+        self._store: OrderedDict[str, list[dict[str, str]]] = OrderedDict()
+        self._maxsize = maxsize
+
+    def get(self, filename: str, csv_bytes: bytes) -> list[dict[str, str]]:
+        with self._lock:
+            if filename in self._store:
+                self._store.move_to_end(filename)
+                return self._store[filename]
+            rows = list(csv.DictReader(io.StringIO(csv_bytes.decode("utf-8", errors="replace"))))
+            self._store[filename] = rows
+            if len(self._store) > self._maxsize:
+                self._store.popitem(last=False)
+            return rows
