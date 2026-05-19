@@ -453,13 +453,6 @@ def test_match_ambiguous_returns_nulls(mock_fetch: MagicMock, match_client: Test
 
 
 INVOICE_CSV = "TRANSACTION_NUMBER,TRANSACTION_DATE,TOTAL_AMOUNTS,DOCUMENT_NUMBER\nINV-001,15-01-2024,500.00,INV-001\n126125908454,20-01-2024,750.00,DOC-002\n6153004273089,22-01-2024,300.00,DOC-003\n"  # noqa: E501
-MATCH_WITH_INVOICE_SETTINGS = Settings(
-    oracle_username="testuser",
-    oracle_password="testpass",
-    oracle_base_url="https://fake.oracle.com",
-    receipt_report_path="/Custom/Receipts/Receipt_Details.xdo",
-    reports_file=Path("/nonexistent/invoice_reports.txt"),
-)
 
 
 @pytest.fixture()
@@ -689,6 +682,18 @@ def test_invoice_match_step3_substring_case_insensitive(
     )
     assert resp.status_code == 200
     assert resp.json()["invoices"][0]["fusion_invoice_number"] == "ABCDEF123456"
+
+
+def test_empty_invoice_number_rejected() -> None:
+    from pydantic import ValidationError
+
+    from bip_api.models import InvoiceItem
+
+    with pytest.raises(ValidationError, match="invoice_number cannot be empty"):
+        InvoiceItem(invoice_number="")
+
+    with pytest.raises(ValidationError, match="invoice_number cannot be empty"):
+        InvoiceItem(invoice_number="   ")
 
 
 def test_report_stem_strips_unsafe_characters() -> None:

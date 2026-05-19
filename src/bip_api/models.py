@@ -69,6 +69,13 @@ class InvoiceItem(BaseModel):
     customer_invoice_number: str | None = None
     store_no: str | None = Field(None, alias="storeNo")
 
+    @field_validator("invoice_number", mode="before")
+    @classmethod
+    def _require_invoice_number(cls, v: object) -> object:
+        if isinstance(v, str) and not v.strip():
+            raise ValueError("invoice_number cannot be empty")
+        return v
+
     @field_validator("invoice_date", "description", "customer_invoice_number", "store_no", mode="before")
     @classmethod
     def _empty_str_to_none(cls, v: object) -> object:

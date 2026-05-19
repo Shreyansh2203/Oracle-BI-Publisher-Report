@@ -114,7 +114,11 @@ def fetch_report_csv(
     if not bytes_match:
         log.error("BIP response missing reportBytes for %s: %s", req.report_path, text[:1000])
         raise ReportError("Oracle BIP returned an unexpected response shape")
-    csv_bytes = base64.b64decode(bytes_match.group(1))
+    try:
+        csv_bytes = base64.b64decode(bytes_match.group(1))
+    except Exception as exc:
+        log.error("BIP returned malformed base64 for %s: %s", req.report_path, exc)
+        raise ReportError("Oracle BIP returned malformed base64 in reportBytes") from exc
     stem = report_stem(req.report_path)
     timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
     filename = f"{stem}_{timestamp}.csv"
