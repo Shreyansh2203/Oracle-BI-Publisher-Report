@@ -95,6 +95,11 @@ class InvoiceItem(BaseModel):
     customer_invoice_number: str | None = None
     store_no: str | None = Field(None, alias="storeNo")
 
+    @field_validator("invoice_date", "description", "customer_invoice_number", "store_no", mode="before")
+    @classmethod
+    def _empty_str_to_none(cls, v: object) -> object:
+        return None if v == "" else v
+
 
 class ReceiptRecord(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
@@ -108,6 +113,11 @@ class ReceiptRecord(BaseModel):
     confidence_label: str | None = None
     invoice_count: int | None = None
     meta: dict[str, object] | None = Field(None, alias="_meta")
+
+    @field_validator("payment_reference", "payment_date", "confidence_label", mode="before")
+    @classmethod
+    def _empty_str_to_none(cls, v: object) -> object:
+        return None if v == "" else v
 
 
 class FusedInvoiceItem(BaseModel):

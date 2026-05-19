@@ -13,7 +13,6 @@ import requests
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-from bip_api.cache import ParsedCSVCache, ReportCache
 from bip_api.client import fetch_report_csv, report_name, report_stem
 from bip_api.config import Settings, get_settings
 from bip_api.exceptions import AuthError, ReportError
@@ -31,7 +30,7 @@ from bip_api.models import (
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/reports", tags=["reports"])
-_CACHE_TIER: dict[str, int] = {"memory": 0, "github": 1, "oracle": 2}
+_CACHE_TIER: dict[str, int] = {"github": 0, "oracle": 1}
 
 
 @dataclass
@@ -39,7 +38,7 @@ class _FetchResult:
     filename: str
     csv_bytes: bytes
     commit_to_github: bool
-    source: Literal["memory", "github", "oracle"] = field(default="oracle")
+    source: Literal["github", "oracle"] = field(default="oracle")
 
 
 def _get_oracle_session(request: Request) -> requests.Session:
@@ -48,14 +47,6 @@ def _get_oracle_session(request: Request) -> requests.Session:
 
 def _get_github_session(request: Request) -> requests.Session:
     return request.app.state.github_session  # type: ignore[no-any-return]
-
-
-def _get_parsed_csv_cache(request: Request) -> ParsedCSVCache:
-    return request.app.state.parsed_csv_cache  # type: ignore[no-any-return]
-
-
-def _get_cache(request: Request) -> ReportCache | None:
-    return request.app.state.report_cache  # type: ignore[no-any-return]
 
 
 def _filter_by_receipt_number(csv_bytes: bytes, receipt_number: str) -> bytes:
@@ -75,30 +66,16 @@ def _filter_by_receipt_number(csv_bytes: bytes, receipt_number: str) -> bytes:
     return out.getvalue().encode("utf-8")
 
 
-def _check_memory_cache(
-    item: DownloadRequest, cache: ReportCache | None
-) -> _FetchResult | None:
-    if cache:
-        hit = cache.get(item)
-        if hit:
-            log.info("Memory cache hit: %s", item.report_path)
-            return _FetchResult(*hit, commit_to_github=False, source="memory")
-    return None
-
-
 async def _check_github_cache(
     item: DownloadRequest,
     settings: Settings,
     github_session: requests.Session,
-    cache: ReportCache | None,
 ) -> _FetchResult | None:
     stem = report_stem(item.report_path)
     github_hit = await asyncio.to_thread(
         get_latest_report_from_github, stem, settings, github_session
     )
     if github_hit:
-        if cache:
-            cache.set(item, *github_hit)
         return _FetchResult(*github_hit, commit_to_github=False, source="github")
     return None
 
@@ -107,12 +84,9 @@ async def _fetch_from_oracle(
     item: DownloadRequest,
     settings: Settings,
     oracle_session: requests.Session,
-    cache: ReportCache | None,
 ) -> _FetchResult | AuthError | ReportError:
     try:
         result = await asyncio.to_thread(fetch_report_csv, item, settings, oracle_session)
-        if cache:
-            cache.set(item, *result)
         return _FetchResult(*result, commit_to_github=not item.has_filters, source="oracle")
     except AuthError as exc:
         return exc
@@ -125,16 +99,12 @@ async def _fetch(
     settings: Settings,
     oracle_session: requests.Session,
     github_session: requests.Session,
-    cache: ReportCache | None,
 ) -> _FetchResult | AuthError | ReportError:
-    result = _check_memory_cache(item, cache)
-    if result:
-        return result
     if not item.has_filters:
-        result = await _check_github_cache(item, settings, github_session, cache)
+        result = await _check_github_cache(item, settings, github_session)
         if result:
             return result
-    return await _fetch_from_oracle(item, settings, oracle_session, cache)
+    return await _fetch_from_oracle(item, settings, oracle_session)
 
 
 def _schedule_github_commit(
@@ -177,7 +147,6 @@ async def download(
     settings: Settings = Depends(get_settings),
     oracle_session: requests.Session = Depends(_get_oracle_session),
     github_session: requests.Session = Depends(_get_github_session),
-    cache: ReportCache | None = Depends(_get_cache),
 ) -> Response:
     if not req.reports:
         raise HTTPException(status_code=400, detail="No reports specified")
@@ -187,7 +156,7 @@ async def download(
             detail=f"Batch size {len(req.reports)} exceeds limit of {settings.max_batch_size}",
         )
     outcomes = await asyncio.gather(
-        *[_fetch(item, settings, oracle_session, github_session, cache) for item in req.reports]
+        *[_fetch(item, settings, oracle_session, github_session) for item in req.reports]
     )
     if len(req.reports) == 1:
         outcome = outcomes[0]
@@ -211,7 +180,7 @@ async def download(
     buf = io.BytesIO()
     fetch_errors: list[str] = []
     success_count = 0
-    zip_sources: list[Literal["memory", "github", "oracle"]] = []
+    zip_sources: list[Literal["github", "oracle"]] = []
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for item, outcome in zip(req.reports, outcomes, strict=True):
             if isinstance(outcome, AuthError):
@@ -379,16 +348,13 @@ def _match_invoice_item(inv: InvoiceItem, invoice_rows: list[dict[str, str]]) ->
 
 def _match_record(
     record: ReceiptRecord,
-    receipt_filename: str,
     receipt_bytes: bytes,
-    parsed_cache: ParsedCSVCache,
-    invoice_filename: str | None = None,
     invoice_bytes: bytes | None = None,
 ) -> MatchedRecord:
-    receipt_rows = parsed_cache.get(receipt_filename, receipt_bytes)
+    receipt_rows = list(csv.DictReader(io.StringIO(receipt_bytes.decode("utf-8", errors="replace"))))
     invoice_rows = (
-        parsed_cache.get(invoice_filename, invoice_bytes)
-        if invoice_filename and invoice_bytes is not None
+        list(csv.DictReader(io.StringIO(invoice_bytes.decode("utf-8", errors="replace"))))
+        if invoice_bytes is not None
         else []
     )
     matched_row = _match_receipt(record, receipt_rows)
@@ -423,8 +389,6 @@ async def match_record(
     settings: Settings = Depends(get_settings),
     oracle_session: requests.Session = Depends(_get_oracle_session),
     github_session: requests.Session = Depends(_get_github_session),
-    cache: ReportCache | None = Depends(_get_cache),
-    parsed_cache: ParsedCSVCache = Depends(_get_parsed_csv_cache),
 ) -> JSONResponse:
     all_paths = settings.load_report_paths()
     receipt_path = settings.receipt_report_path or next(
@@ -441,7 +405,7 @@ async def match_record(
     fetch_paths = [receipt_path] + ([invoice_path] if invoice_path else [])
     items = [DownloadRequest(report_path=p) for p in fetch_paths]
     outcomes = await asyncio.gather(
-        *[_fetch(item, settings, oracle_session, github_session, cache) for item in items]
+        *[_fetch(item, settings, oracle_session, github_session) for item in items]
     )
     receipt_outcome = outcomes[0]
     if isinstance(receipt_outcome, AuthError):
@@ -460,10 +424,7 @@ async def match_record(
             _schedule_github_commit(background_tasks, outcome, settings, github_session)
     matched = _match_record(
         record,
-        receipt_outcome.filename,
         receipt_outcome.csv_bytes,
-        parsed_cache,
-        invoice_outcome.filename if invoice_outcome else None,
         invoice_outcome.csv_bytes if invoice_outcome else None,
     )
     return JSONResponse(content=matched.model_dump(by_alias=True, mode="json"))

@@ -23,14 +23,12 @@ class Settings(BaseSettings):
     max_batch_size: int = 20
     request_timeout: int = 120
     http_pool_size: int = 10
-    cache_ttl: int = 300
     github_token: str = ""
     github_repo: str = ""
     github_branch: str = "main"
     github_reports_dir: str = "reports"
     file_age_threshold_hours: float = 4
     receipt_report_path: str = ""
-    cache_maxsize: int = 128
     cors_origins: str = ""
     port: int = 8000
     debug: bool = False

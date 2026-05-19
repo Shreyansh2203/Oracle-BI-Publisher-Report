@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import io
-import time
 import zipfile
 from collections.abc import Iterator
 from pathlib import Path
@@ -11,7 +10,6 @@ import pytest
 import requests
 from fastapi.testclient import TestClient
 
-from bip_api.cache import ReportCache
 from bip_api.client import fetch_report_csv
 from bip_api.config import Settings, get_settings
 from bip_api.exceptions import AuthError, ReportError
@@ -330,35 +328,6 @@ def test_github_cache_ignores_files_with_longer_stem() -> None:
     assert result is None
     assert session.get.call_count == 1
 
-
-def test_cache_ttl_expiry() -> None:
-    cache = ReportCache(ttl_seconds=60)
-    req = DownloadRequest(report_path="/test.xdo")
-    cache.set(req, "test.csv", b"data")
-    with patch("bip_api.cache.time.monotonic", return_value=time.monotonic() + 61):
-        assert cache.get(req) is None
-
-
-def test_cache_lru_eviction() -> None:
-    cache = ReportCache(ttl_seconds=300, maxsize=2)
-    req_a = DownloadRequest(report_path="/a.xdo")
-    req_b = DownloadRequest(report_path="/b.xdo")
-    req_c = DownloadRequest(report_path="/c.xdo")
-    cache.set(req_a, "a.csv", b"a")
-    cache.set(req_b, "b.csv", b"b")
-    cache.get(req_a)
-    cache.set(req_c, "c.csv", b"c")
-    assert cache.get(req_a) is not None
-    assert cache.get(req_c) is not None
-    assert cache.get(req_b) is None
-
-
-def test_cache_hit_returns_correct_data() -> None:
-    cache = ReportCache(ttl_seconds=300)
-    req = DownloadRequest(report_path="/x.xdo")
-    cache.set(req, "x.csv", b"content")
-    result = cache.get(req)
-    assert result == ("x.csv", b"content")
 
 
 @patch("bip_api.routers.reports.fetch_report_csv")
