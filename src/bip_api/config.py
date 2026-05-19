@@ -28,10 +28,11 @@ class Settings(BaseSettings):
     github_repo: str = ""
     github_branch: str = "main"
     github_reports_dir: str = "reports"
-    file_age_threshold_hours: float = 0.6
+    file_age_threshold_hours: float = 4
     receipt_report_path: str = ""
     cache_maxsize: int = 128
     cors_origins: str = ""
+    port: int = 8000
     debug: bool = False
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
     _paths_cache: list[str] | None = PrivateAttr(default=None)

@@ -237,7 +237,7 @@ async def download(
         "X-Cache": zip_cache_source,
     }
     if fetch_errors:
-        headers["X-Failed-Reports"] = "; ".join(fetch_errors)
+        headers["X-Failed-Reports"] = "; ".join(fetch_errors)[:4096]
     buf.seek(0)
     return StreamingResponse(buf, media_type="application/zip", headers=headers)
 
@@ -314,14 +314,20 @@ def _match_invoice_item(inv: InvoiceItem, invoice_rows: list[dict[str, str]]) ->
     inv_date = (converted_date or "").strip().lower()
     cust_inv_num = (inv.customer_invoice_number or "").strip().lower()
     matched_row: dict[str, str] | None = None
-    hits = [
-        r
-        for r in invoice_rows
-        if r.get(_INV_NUMBER_COL, "").strip().lower() == inv_num
-        and (not inv_date or r.get(_INV_DATE_COL, "").strip().lower() == inv_date)
-    ]
+    # Step 1a: exact match on invoice_number only
+    hits = [r for r in invoice_rows if r.get(_INV_NUMBER_COL, "").strip().lower() == inv_num]
     if len(hits) == 1:
         matched_row = hits[0]
+    elif inv_date:
+        # Step 1b: exact match on invoice_number + invoice_date
+        hits = [
+            r
+            for r in invoice_rows
+            if r.get(_INV_NUMBER_COL, "").strip().lower() == inv_num
+            and r.get(_INV_DATE_COL, "").strip().lower() == inv_date
+        ]
+        if len(hits) == 1:
+            matched_row = hits[0]
     if matched_row is None and cust_inv_num:
         hits = [
             r

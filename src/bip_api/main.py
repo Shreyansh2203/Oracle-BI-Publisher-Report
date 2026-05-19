@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import time
 import uuid
 from collections.abc import AsyncGenerator
@@ -38,10 +37,12 @@ class _JsonFormatter(logging.Formatter):
 def _configure_logging(debug: bool) -> None:
     handler = logging.StreamHandler()
     handler.setFormatter(_JsonFormatter())
-    pkg_logger = logging.getLogger("bip_api")
-    pkg_logger.handlers = [handler]
-    pkg_logger.setLevel(logging.DEBUG if debug else logging.INFO)
-    pkg_logger.propagate = False
+    level = logging.DEBUG if debug else logging.INFO
+    for name in ("bip_api", "uvicorn", "uvicorn.error", "uvicorn.access", "urllib3"):
+        logger = logging.getLogger(name)
+        logger.handlers = [handler]
+        logger.setLevel(level)
+        logger.propagate = False
 
 
 @asynccontextmanager
@@ -80,6 +81,8 @@ def create_app() -> FastAPI:
         if settings.cors_origins.strip() == "*"
         else [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
     )
+    if not origins:
+        log.warning("CORS_ORIGINS is not configured — all cross-origin requests will be rejected")
     application.add_middleware(
         CORSMiddleware, allow_origins=origins, allow_methods=["GET", "POST"], allow_headers=["*"]
     )
@@ -118,7 +121,7 @@ def run() -> None:
     uvicorn.run(
         "bip_api.main:app",
         host="0.0.0.0",
-        port=int(os.getenv("PORT", "8000")),
+        port=settings.port,
         reload=settings.debug,
         log_level="debug" if settings.debug else "info",
     )

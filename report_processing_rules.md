@@ -75,15 +75,27 @@ ELSE (payment_reference IS null):
 ### Step 1 — Exact Match on Invoice Number + Invoice Date
 
 ```
+
 Search the Invoice Details Report for rows where:
     invoice_number (TRANSACTION_NUMBER) = invoice_number (from input, exact match)
-    AND invoice_date (TRANSACTION_DATE) = invoice_date (from input, exact match)
+	
+	IF exactly 1 row found:
+		fusion_invoice_number = that row's TRANSACTION_NUMBER
+		fusion_invoice_date   = that row's TRANSACTION_DATE
+		fusion_invoice_amount = that row's TOTAL_AMOUNTS
+		→ STOP. Do not go to Step 2.
+		
+	ELSE IF (0 rows or 2+ rows found)
+		
+		Search the Invoice Details Report for rows where:
+			invoice_number (TRANSACTION_NUMBER) = invoice_number (from input, exact match)
+			AND invoice_date (TRANSACTION_DATE) = invoice_date (from input, exact match)
 
-IF exactly 1 row found:
-    fusion_invoice_number = that row's TRANSACTION_NUMBER
-    fusion_invoice_date   = that row's TRANSACTION_DATE
-    fusion_invoice_amount = that row's TOTAL_AMOUNTS
-    → STOP. Do not go to Step 2.
+		IF exactly 1 row found:
+			fusion_invoice_number = that row's TRANSACTION_NUMBER
+			fusion_invoice_date   = that row's TRANSACTION_DATE
+			fusion_invoice_amount = that row's TOTAL_AMOUNTS
+		→ STOP. Do not go to Step 2.
 
 ELSE (0 rows or 2+ rows found):
     → Go to Step 2.

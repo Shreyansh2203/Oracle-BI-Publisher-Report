@@ -34,9 +34,9 @@ FAKE_REPORT_PATH = "/Custom/Finacials/Receivable Transactions/Invoice Details Re
 
 
 @pytest.fixture(name="client")
-def client_fixture() -> TestClient:
+def client_fixture() -> Iterator[TestClient]:
     with TestClient(app) as c:
-        return c
+        yield c
 
 
 def test_health(client: TestClient) -> None:

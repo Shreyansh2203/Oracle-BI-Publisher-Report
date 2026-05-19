@@ -79,11 +79,12 @@ def _cleanup_old_reports(
     if not resp.ok:
         log.warning("GitHub dir listing for cleanup failed: %s", resp.status_code)
         return
+    file_re = re.compile(f"^{re.escape(stem)}_\\d{{8}}_\\d{{6}}\\.csv$")
     for f in resp.json():
         if not isinstance(f, dict):
             continue
         name = f.get("name", "")
-        if name == new_filename or not name.startswith(stem + "_") or not name.endswith(".csv"):
+        if name == new_filename or not file_re.match(name):
             continue
         sha = f.get("sha")
         if not sha:
@@ -134,7 +135,7 @@ def commit_report(
             stem = _TS_RE.sub("", filename)
             _cleanup_old_reports(stem, filename, settings, session, headers)
             return
-        if resp.status_code == 422 and sha is None:
+        if resp.status_code == 422:
             check = session.get(url, headers=headers, timeout=15)
             if check.status_code == 200:
                 sha = check.json().get("sha")
@@ -151,7 +152,6 @@ def commit_report(
             continue
         log.error("GitHub commit failed for %s: %s %s", path, resp.status_code, resp.text[:300])
         return
-    else:
-        log.error(
-            "GitHub commit failed for %s: exhausted retries, could not retrieve file SHA", path
-        )
+    log.error(
+        "GitHub commit failed for %s: exhausted retries, could not retrieve file SHA", path
+    )

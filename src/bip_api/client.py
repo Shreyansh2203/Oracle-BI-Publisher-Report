@@ -66,7 +66,6 @@ def make_oracle_session(pool_size: int = 10) -> requests.Session:
     )
     adapter = HTTPAdapter(max_retries=retry, pool_connections=pool_size, pool_maxsize=pool_size)
     session.mount("https://", adapter)
-    session.mount("http://", adapter)
     return session
 
 
