@@ -25,13 +25,6 @@ _RE_REPORT_BYTES = re.compile("<reportBytes>(.*?)</reportBytes>", re.DOTALL)
 
 
 def _build_envelope(req: DownloadRequest, username: str, password: str) -> str:
-    params = ""
-    if req.customer_name:
-        params += f"<pub:item><pub:name>P_CUSTOMER_NAME</pub:name><pub:values><pub:item>{xml_escape(req.customer_name)}</pub:item></pub:values></pub:item>"  # noqa: E501
-    if req.from_date:
-        params += f"<pub:item><pub:name>P_FROM_DATE</pub:name><pub:values><pub:item>{xml_escape(req.from_date)}</pub:item></pub:values></pub:item>"  # noqa: E501
-    if req.to_date:
-        params += f"<pub:item><pub:name>P_TO_DATE</pub:name><pub:values><pub:item>{xml_escape(req.to_date)}</pub:item></pub:values></pub:item>"  # noqa: E501
     return textwrap.dedent(f"""\
         <?xml version="1.0" encoding="utf-8"?>
         <soapenv:Envelope
@@ -45,9 +38,6 @@ def _build_envelope(req: DownloadRequest, username: str, password: str) -> str:
               <pub:reportRequest>
                 <pub:reportAbsolutePath>{xml_escape(req.report_path)}</pub:reportAbsolutePath>
                 <pub:sizeOfDataChunkDownload>-1</pub:sizeOfDataChunkDownload>
-                <pub:parameterNameValues>
-                  {params}
-                </pub:parameterNameValues>
                 <pub:attributeFormat>csv</pub:attributeFormat>
               </pub:reportRequest>
             </pub:runReport>

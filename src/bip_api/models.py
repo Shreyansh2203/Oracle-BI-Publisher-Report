@@ -1,24 +1,16 @@
 from __future__ import annotations
 
-from datetime import datetime
-
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class DownloadRequest(BaseModel):
     report_path: str
-    customer_name: str | None = None
-    from_date: str | None = None
-    to_date: str | None = None
     receipt_number: str | None = None
     model_config = {
         "json_schema_extra": {
             "examples": [
                 {
                     "report_path": "/Custom/Finacials/Receivable Transactions/Invoice Details Report.xdo",  # noqa: E501
-                    "customer_name": "Acme Corp",
-                    "from_date": "01-01-2024",
-                    "to_date": "31-03-2024",
                 },
                 {
                     "report_path": "/Custom/Finacials/Receivables/Receipt Details Report.xdo",
@@ -35,20 +27,6 @@ class DownloadRequest(BaseModel):
             raise ValueError("report_path cannot be empty")
         return v
 
-    @field_validator("from_date", "to_date", mode="before")
-    @classmethod
-    def validate_date_format(cls, v: str | None) -> str | None:
-        if v is not None:
-            try:
-                datetime.strptime(v, "%d-%m-%Y")
-            except ValueError:
-                raise ValueError("Date must be in DD-MM-YYYY format (e.g. 31-01-2024)") from None
-        return v
-
-    @property
-    def has_filters(self) -> bool:
-        return bool(self.customer_name or self.from_date or self.to_date)
-
 
 class ReportRequest(BaseModel):
     reports: list[DownloadRequest]
@@ -59,11 +37,7 @@ class ReportRequest(BaseModel):
                 {
                     "reports": [
                         {"report_path": "/Custom/Finacials/Receivable Transactions/Invoice Details Report.xdo"},  # noqa: E501
-                        {
-                            "report_path": "/Custom/Finacials/Receivable Transactions/Receipt Details Report.xdo",  # noqa: E501
-                            "from_date": "01-01-2024",
-                            "to_date": "31-03-2024",
-                        },
+                        {"report_path": "/Custom/Finacials/Receivables/Receipt Details Report.xdo"},
                     ]
                 },
             ]

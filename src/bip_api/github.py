@@ -139,6 +139,12 @@ def commit_report(
             check = session.get(url, headers=headers, timeout=15)
             if check.status_code == 200:
                 sha = check.json().get("sha")
+            else:
+                log.warning(
+                    "GitHub 422 for %s but SHA fetch returned %d — retry without SHA",
+                    path,
+                    check.status_code,
+                )
             continue
         if resp.status_code in (500, 502, 503, 504) and attempt < 2:
             wait = 2**attempt

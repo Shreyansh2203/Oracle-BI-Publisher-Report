@@ -31,6 +31,11 @@ CSV_BYTES = b"col1,col2\nval1,val2\n"
 FAKE_REPORT_PATH = "/Custom/Finacials/Receivable Transactions/Invoice Details Report.xdo"
 
 
+@pytest.fixture(autouse=True)
+def reset_fake_session() -> None:
+    FAKE_SESSION.reset_mock()
+
+
 @pytest.fixture(name="client")
 def client_fixture() -> Iterator[TestClient]:
     with TestClient(app) as c:
@@ -170,20 +175,6 @@ def test_download_batch_all_errors_returns_502(mock_fetch: MagicMock, client: Te
     assert resp.status_code == 502
 
 
-@patch("bip_api.routers.reports.commit_report")
-@patch("bip_api.routers.reports.get_latest_report_from_github")
-@patch("bip_api.routers.reports.fetch_report_csv")
-def test_filtered_request_bypasses_github(
-    mock_fetch: MagicMock, mock_github: MagicMock, mock_commit: MagicMock, client: TestClient
-) -> None:
-    mock_github.return_value = ("stale_AR_Report.csv", b"WRONG_FILTERED_DATA")
-    mock_fetch.return_value = ("AR_Report.csv", CSV_BYTES)
-    resp = client.post("/reports/download", json=_single_body(customer_name="Acme Corp"))
-    assert resp.status_code == 200
-    assert resp.content == CSV_BYTES
-    mock_github.assert_not_called()
-    mock_fetch.assert_called_once()
-    mock_commit.assert_not_called()
 
 
 def test_fetch_report_csv_sanitizes_http_error_body() -> None:
@@ -707,17 +698,6 @@ def test_report_stem_strips_unsafe_characters() -> None:
     assert report_stem("/Custom/Finance/Normal Report.xdo") == "Normal_Report"
     assert report_stem("/Custom/Finance/Report-2024.xdo") == "Report-2024"
 
-
-def test_invalid_calendar_date_rejected() -> None:
-    from pydantic import ValidationError
-
-    with pytest.raises(ValidationError, match="DD-MM-YYYY"):
-        DownloadRequest(report_path="/x.xdo", from_date="31-02-2024")
-
-
-def test_valid_date_accepted() -> None:
-    req = DownloadRequest(report_path="/x.xdo", from_date="29-02-2024")
-    assert req.from_date == "29-02-2024"
 
 
 def test_match_no_receipt_path_configured(client: TestClient, tmp_path: Path) -> None:

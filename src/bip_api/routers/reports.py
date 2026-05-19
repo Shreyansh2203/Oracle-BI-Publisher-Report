@@ -87,7 +87,7 @@ async def _fetch_from_oracle(
 ) -> _FetchResult | AuthError | ReportError:
     try:
         result = await asyncio.to_thread(fetch_report_csv, item, settings, oracle_session)
-        return _FetchResult(*result, commit_to_github=not item.has_filters, source="oracle")
+        return _FetchResult(*result, commit_to_github=True, source="oracle")
     except AuthError as exc:
         return exc
     except ReportError as exc:
@@ -100,10 +100,9 @@ async def _fetch(
     oracle_session: requests.Session,
     github_session: requests.Session,
 ) -> _FetchResult | AuthError | ReportError:
-    if not item.has_filters:
-        result = await _check_github_cache(item, settings, github_session)
-        if result:
-            return result
+    result = await _check_github_cache(item, settings, github_session)
+    if result:
+        return result
     return await _fetch_from_oracle(item, settings, oracle_session)
 
 
@@ -181,6 +180,7 @@ async def download(
     fetch_errors: list[str] = []
     success_count = 0
     zip_sources: list[Literal["github", "oracle"]] = []
+    used_names: dict[str, int] = {}
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for item, outcome in zip(req.reports, outcomes, strict=True):
             if isinstance(outcome, AuthError):
@@ -191,7 +191,14 @@ async def download(
                 zip_sources.append(outcome.source)
                 _schedule_github_commit(background_tasks, outcome, settings, github_session)
                 outcome = _apply_receipt_filter(outcome, item.receipt_number)
-                download_filename = f"{report_name(item.report_path)}.csv"
+                base_name = f"{report_name(item.report_path)}.csv"
+                if base_name in used_names:
+                    used_names[base_name] += 1
+                    stem, ext = base_name.rsplit(".", 1)
+                    download_filename = f"{stem}_{used_names[base_name]}.{ext}"
+                else:
+                    used_names[base_name] = 0
+                    download_filename = base_name
                 zf.writestr(download_filename, outcome.csv_bytes)
                 success_count += 1
     if success_count == 0:
@@ -297,12 +304,12 @@ def _match_invoice_item(inv: InvoiceItem, invoice_rows: list[dict[str, str]]) ->
         ]
         if len(hits) == 1:
             matched_row = hits[0]
-    if matched_row is None and cust_inv_num:
+    if matched_row is None and cust_inv_num and inv_date:
         hits = [
             r
             for r in invoice_rows
             if r.get(_INV_DOC_NUMBER_COL, "").strip().lower() == cust_inv_num
-            and (not inv_date or r.get(_INV_DATE_COL, "").strip().lower() == inv_date)
+            and r.get(_INV_DATE_COL, "").strip().lower() == inv_date
         ]
         if len(hits) == 1:
             matched_row = hits[0]
@@ -311,12 +318,12 @@ def _match_invoice_item(inv: InvoiceItem, invoice_rows: list[dict[str, str]]) ->
                 inv.invoice_number,
                 cust_inv_num,
             )
-    if matched_row is None and inv_num:
+    if matched_row is None and inv_num and inv_date:
         hits = [
             r
             for r in invoice_rows
             if inv_num in r.get(_INV_NUMBER_COL, "").strip().lower()
-            and (not inv_date or r.get(_INV_DATE_COL, "").strip().lower() == inv_date)
+            and r.get(_INV_DATE_COL, "").strip().lower() == inv_date
         ]
         if len(hits) == 1:
             matched_row = hits[0]
