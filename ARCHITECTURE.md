@@ -1,6 +1,9 @@
 # Architecture
 
 ```mermaid
+---
+id: 31a19f4c-680a-46ce-a666-5a77935af75a
+---
 flowchart TB
     Client(["HTTP Client"])
 

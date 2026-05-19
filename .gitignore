@@ -11,3 +11,6 @@ reports/
 dist/
 *.egg-info/
 JSON Records/
+ARCHITECTURE.md
+LICENSE 
+DOCUMENTATION.md
