@@ -33,10 +33,18 @@ class ReportRequest(BaseModel):
     model_config = {
         "json_schema_extra": {
             "examples": [
-                {"reports": [{"report_path": "/Custom/Finacials/Receivable Transactions/Invoice Details Report.xdo"}]},  # noqa: E501
                 {
                     "reports": [
-                        {"report_path": "/Custom/Finacials/Receivable Transactions/Invoice Details Report.xdo"},  # noqa: E501
+                        {
+                            "report_path": "/Custom/Finacials/Receivable Transactions/Invoice Details Report.xdo"  # noqa: E501
+                        }
+                    ]
+                },
+                {
+                    "reports": [
+                        {
+                            "report_path": "/Custom/Finacials/Receivable Transactions/Invoice Details Report.xdo"  # noqa: E501
+                        },
                         {"report_path": "/Custom/Finacials/Receivables/Receipt Details Report.xdo"},
                     ]
                 },
@@ -76,7 +84,9 @@ class InvoiceItem(BaseModel):
             raise ValueError("invoice_number cannot be empty")
         return v
 
-    @field_validator("invoice_date", "description", "customer_invoice_number", "store_no", mode="before")
+    @field_validator(
+        "invoice_date", "description", "customer_invoice_number", "store_no", mode="before"
+    )
     @classmethod
     def _empty_str_to_none(cls, v: object) -> object:
         return None if v == "" else v

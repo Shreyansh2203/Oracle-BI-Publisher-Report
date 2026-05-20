@@ -175,8 +175,6 @@ def test_download_batch_all_errors_returns_502(mock_fetch: MagicMock, client: Te
     assert resp.status_code == 502
 
 
-
-
 def test_fetch_report_csv_sanitizes_http_error_body() -> None:
     session = MagicMock(spec=requests.Session)
     response = MagicMock()
@@ -318,7 +316,6 @@ def test_github_cache_ignores_files_with_longer_stem() -> None:
     result = get_latest_report_from_github("AR", settings, session)
     assert result is None
     assert session.get.call_count == 1
-
 
 
 @patch("bip_api.routers.reports.fetch_report_csv")
@@ -704,7 +701,6 @@ def test_report_stem_strips_unsafe_characters() -> None:
     assert report_stem("/Custom/Finance/Report-2024.xdo") == "Report-2024"
 
 
-
 def test_match_no_receipt_path_configured(client: TestClient, tmp_path: Path) -> None:
     empty_settings = Settings(
         oracle_username="u",
@@ -719,3 +715,74 @@ def test_match_no_receipt_path_configured(client: TestClient, tmp_path: Path) ->
     assert resp.status_code == 500
     assert "receipt report path" in resp.json()["detail"].lower()
     app.dependency_overrides[get_settings] = lambda: FAKE_SETTINGS
+
+
+@patch("bip_api.routers.reports.fetch_report_csv")
+def test_match_receipt_missing_payment_date_fails(
+    mock_fetch: MagicMock, match_client: TestClient
+) -> None:
+    mock_fetch.return_value = ("Receipt_Details_20240115_120000.csv", RECEIPT_CSV.encode())
+    resp = match_client.post(
+        "/reports/match",
+        json={
+            "customer_name": "Acme Corp",
+            "total_amount": 1000.0,
+            "invoices": [],
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["fusion_receipt_number"] is None
+
+
+@patch("bip_api.routers.reports.fetch_report_csv")
+def test_match_receipt_missing_total_amount_fails(
+    mock_fetch: MagicMock, match_client: TestClient
+) -> None:
+    mock_fetch.return_value = ("Receipt_Details_20240115_120000.csv", RECEIPT_CSV.encode())
+    resp = match_client.post(
+        "/reports/match",
+        json={
+            "customer_name": "Acme Corp",
+            "payment_reference": "REC001",
+            "invoices": [],
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["fusion_receipt_number"] is None
+
+
+def test_github_cache_age_strictly_greater() -> None:
+    from datetime import UTC, datetime
+    from unittest.mock import MagicMock, patch
+
+    from bip_api.github import get_latest_report_from_github
+
+    settings = Settings(
+        oracle_username="u",
+        oracle_password="p",
+        oracle_base_url="https://x.com",
+        github_token="tok",
+        github_repo="owner/repo",
+        file_age_threshold_hours=4.0,
+    )
+    session = MagicMock(spec=requests.Session)
+    dir_listing = MagicMock()
+    dir_listing.status_code = 200
+    dir_listing.ok = True
+    dir_listing.json.return_value = [
+        {"name": "AR_20250101_120000.csv", "download_url": "https://example.com/file.csv"}
+    ]
+    file_resp = MagicMock()
+    file_resp.ok = True
+    file_resp.content = b"content"
+    session.get.side_effect = [dir_listing, file_resp]
+
+    with patch("bip_api.github.datetime") as mock_dt:
+        mock_dt.now.return_value = datetime(2025, 1, 1, 16, 0, 0, tzinfo=UTC)
+        mock_dt.strptime = datetime.strptime
+        result = get_latest_report_from_github("AR", settings, session)
+        assert result is not None
+        assert result[0] == "AR_20250101_120000.csv"
+        assert result[1] == b"content"

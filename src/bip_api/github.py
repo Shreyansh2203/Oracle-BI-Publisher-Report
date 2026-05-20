@@ -46,9 +46,9 @@ def get_latest_report_from_github(
     except ValueError:
         return None
     age_hours = (datetime.now(UTC) - file_dt).total_seconds() / 3600
-    if age_hours >= settings.file_age_threshold_hours:
+    if age_hours > settings.file_age_threshold_hours:
         log.info(
-            "GitHub file %s is stale (%.1fh >= %.1fh threshold) — will refresh",
+            "GitHub file %s is stale (%.1fh > %.1fh threshold) — will refresh",
             filename,
             age_hours,
             settings.file_age_threshold_hours,
@@ -158,6 +158,4 @@ def commit_report(
             continue
         log.error("GitHub commit failed for %s: %s %s", path, resp.status_code, resp.text[:300])
         return
-    log.error(
-        "GitHub commit failed for %s: exhausted retries, could not retrieve file SHA", path
-    )
+    log.error("GitHub commit failed for %s: exhausted retries, could not retrieve file SHA", path)

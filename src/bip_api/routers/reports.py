@@ -57,7 +57,7 @@ def _filter_by_receipt_number(csv_bytes: bytes, receipt_number: str) -> bytes:
     matching = [
         row
         for row in reader
-        if row.get("RECEIPT_NUMBER", "").strip().lower() == receipt_number.strip().lower()
+        if (row.get("RECEIPT_NUMBER") or "").strip().lower() == receipt_number.strip().lower()
     ]
     out = io.StringIO()
     writer = csv.DictWriter(out, fieldnames=reader.fieldnames)
@@ -234,7 +234,7 @@ def _parse_csv_amount(val: str) -> float | None:
 
 def _amounts_match(csv_val: str, expected: float | None) -> bool:
     if expected is None:
-        return True
+        return False
     parsed = _parse_csv_amount(csv_val)
     return parsed is not None and abs(parsed - expected) < _AMOUNT_TOLERANCE
 
@@ -267,20 +267,25 @@ def _match_receipt(record: ReceiptRecord, rows: list[dict[str, str]]) -> dict[st
         hits = [
             r
             for r in rows
-            if r.get("RECEIPT_NUMBER", "").strip().lower()
-            == record.payment_reference.strip().lower()
+            if record.payment_reference.strip().lower()
+            in (r.get("RECEIPT_NUMBER") or "").strip().lower()
             and _amounts_match(r.get("RECEIPT_AMOUNT", ""), record.total_amount)
         ]
     else:
         expected_date = _convert_json_date(record.payment_date)
         customer = (record.customer_name or "").strip().lower()
-        hits = [
-            r
-            for r in rows
-            if r.get("BILL_CUSTOMER_NAME", "").strip().lower() == customer
-            and (not expected_date or r.get("RECEIPT_DATE", "").strip() == expected_date)
-            and _amounts_match(r.get("RECEIPT_AMOUNT", ""), record.total_amount)
-        ] if customer else []
+        hits = (
+            [
+                r
+                for r in rows
+                if (r.get("BILL_CUSTOMER_NAME") or "").strip().lower() == customer
+                and expected_date is not None
+                and (r.get("RECEIPT_DATE") or "").strip() == expected_date
+                and _amounts_match(r.get("RECEIPT_AMOUNT", ""), record.total_amount)
+            ]
+            if customer
+            else []
+        )
     return hits[0] if len(hits) == 1 else None
 
 
@@ -291,7 +296,7 @@ def _match_invoice_item(inv: InvoiceItem, invoice_rows: list[dict[str, str]]) ->
     cust_inv_num = (inv.customer_invoice_number or "").strip().lower()
     matched_row: dict[str, str] | None = None
     # Step 1a: exact match on invoice_number only
-    hits = [r for r in invoice_rows if r.get(_INV_NUMBER_COL, "").strip().lower() == inv_num]
+    hits = [r for r in invoice_rows if (r.get(_INV_NUMBER_COL) or "").strip().lower() == inv_num]
     if len(hits) == 1:
         matched_row = hits[0]
     elif inv_date:
@@ -299,8 +304,8 @@ def _match_invoice_item(inv: InvoiceItem, invoice_rows: list[dict[str, str]]) ->
         hits = [
             r
             for r in invoice_rows
-            if r.get(_INV_NUMBER_COL, "").strip().lower() == inv_num
-            and r.get(_INV_DATE_COL, "").strip().lower() == inv_date
+            if (r.get(_INV_NUMBER_COL) or "").strip().lower() == inv_num
+            and (r.get(_INV_DATE_COL) or "").strip().lower() == inv_date
         ]
         if len(hits) == 1:
             matched_row = hits[0]
@@ -308,8 +313,8 @@ def _match_invoice_item(inv: InvoiceItem, invoice_rows: list[dict[str, str]]) ->
         hits = [
             r
             for r in invoice_rows
-            if r.get(_INV_DOC_NUMBER_COL, "").strip().lower() == cust_inv_num
-            and r.get(_INV_DATE_COL, "").strip().lower() == inv_date
+            if (r.get(_INV_DOC_NUMBER_COL) or "").strip().lower() == cust_inv_num
+            and (r.get(_INV_DATE_COL) or "").strip().lower() == inv_date
         ]
         if len(hits) == 1:
             matched_row = hits[0]
@@ -322,8 +327,8 @@ def _match_invoice_item(inv: InvoiceItem, invoice_rows: list[dict[str, str]]) ->
         hits = [
             r
             for r in invoice_rows
-            if inv_num in r.get(_INV_NUMBER_COL, "").strip().lower()
-            and r.get(_INV_DATE_COL, "").strip().lower() == inv_date
+            if inv_num in (r.get(_INV_NUMBER_COL) or "").strip().lower()
+            and (r.get(_INV_DATE_COL) or "").strip().lower() == inv_date
         ]
         if len(hits) == 1:
             matched_row = hits[0]
@@ -342,9 +347,10 @@ def _match_invoice_item(inv: InvoiceItem, invoice_rows: list[dict[str, str]]) ->
     return FusedInvoiceItem(
         line_id=inv.line_id,
         invoice_number=inv.invoice_number,
-        fusion_invoice_number=matched_row.get(_INV_NUMBER_COL, "").strip() or None,
+        fusion_invoice_number=(matched_row.get(_INV_NUMBER_COL) or "").strip() or None,
         invoice_date=inv.invoice_date,
-        fusion_invoice_date=_convert_csv_date(matched_row.get(_INV_DATE_COL, "").strip()) or None,
+        fusion_invoice_date=_convert_csv_date((matched_row.get(_INV_DATE_COL) or "").strip())
+        or None,
         invoice_amount=inv.invoice_amount,
         fusion_invoice_amount=_parse_csv_amount(matched_row.get(_INV_AMOUNT_COL, "")),
         description=inv.description,
@@ -358,7 +364,8 @@ def _match_record(
     receipt_bytes: bytes,
     invoice_bytes: bytes | None = None,
 ) -> MatchedRecord:
-    receipt_rows = list(csv.DictReader(io.StringIO(receipt_bytes.decode("utf-8", errors="replace"))))
+    receipt_text = receipt_bytes.decode("utf-8", errors="replace")
+    receipt_rows = list(csv.DictReader(io.StringIO(receipt_text)))
     invoice_rows = (
         list(csv.DictReader(io.StringIO(invoice_bytes.decode("utf-8", errors="replace"))))
         if invoice_bytes is not None
@@ -368,15 +375,15 @@ def _match_record(
     fused_invoices = [_match_invoice_item(inv, invoice_rows) for inv in record.invoices]
     return MatchedRecord(
         customer_name=record.customer_name,
-        fusion_customer_name=matched_row.get("BILL_CUSTOMER_NAME", "").strip() or None
+        fusion_customer_name=(matched_row.get("BILL_CUSTOMER_NAME") or "").strip() or None
         if matched_row
         else None,
         payment_reference=record.payment_reference,
-        fusion_receipt_number=matched_row.get("RECEIPT_NUMBER", "").strip() or None
+        fusion_receipt_number=(matched_row.get("RECEIPT_NUMBER") or "").strip() or None
         if matched_row
         else None,
         payment_date=record.payment_date,
-        fusion_receipt_date=_convert_csv_date(matched_row.get("RECEIPT_DATE", "").strip())
+        fusion_receipt_date=_convert_csv_date((matched_row.get("RECEIPT_DATE") or "").strip())
         if matched_row
         else None,
         header_id=record.header_id,

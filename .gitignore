@@ -10,7 +10,7 @@ venv/
 reports/
 dist/
 *.egg-info/
-JSON Records/
+JSON/
 ARCHITECTURE.md
 LICENSE 
 DOCUMENTATION.md
