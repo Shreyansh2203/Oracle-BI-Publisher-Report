@@ -206,26 +206,10 @@ def test_fetch_report_csv_sanitizes_soap_fault() -> None:
 
 
 @patch("bip_api.routers.reports.commit_report")
-@patch("bip_api.routers.reports.get_latest_report_from_github")
 @patch("bip_api.routers.reports.fetch_report_csv")
-def test_unfiltered_request_uses_github_cache(
-    mock_fetch: MagicMock, mock_github: MagicMock, mock_commit: MagicMock, client: TestClient
+def test_oracle_fetch_triggers_github_commit(
+    mock_fetch: MagicMock, mock_commit: MagicMock, client: TestClient
 ) -> None:
-    mock_github.return_value = ("AR_Report_20250101_120000.csv", CSV_BYTES)
-    resp = client.post("/reports/download", json=_single_body())
-    assert resp.status_code == 200
-    assert resp.content == CSV_BYTES
-    mock_github.assert_called_once()
-    mock_fetch.assert_not_called()
-
-
-@patch("bip_api.routers.reports.commit_report")
-@patch("bip_api.routers.reports.get_latest_report_from_github")
-@patch("bip_api.routers.reports.fetch_report_csv")
-def test_fresh_oracle_fetch_triggers_github_commit(
-    mock_fetch: MagicMock, mock_github: MagicMock, mock_commit: MagicMock, client: TestClient
-) -> None:
-    mock_github.return_value = None
     mock_fetch.return_value = ("AR_Report.csv", CSV_BYTES)
     resp = client.post("/reports/download", json=_single_body())
     assert resp.status_code == 200
@@ -261,16 +245,6 @@ def test_x_cache_oracle(mock_fetch: MagicMock, client: TestClient) -> None:
     resp = client.post("/reports/download", json=_single_body())
     assert resp.status_code == 200
     assert resp.headers["x-cache"] == "oracle"
-
-
-@patch("bip_api.routers.reports.fetch_report_csv")
-@patch("bip_api.routers.reports.get_latest_report_from_github")
-def test_x_cache_github(mock_github: MagicMock, mock_fetch: MagicMock, client: TestClient) -> None:
-    mock_github.return_value = ("AR_Report_20250101_120000.csv", CSV_BYTES)
-    resp = client.post("/reports/download", json=_single_body())
-    assert resp.status_code == 200
-    assert resp.headers["x-cache"] == "github"
-    mock_fetch.assert_not_called()
 
 
 @patch("bip_api.routers.reports.fetch_report_csv")

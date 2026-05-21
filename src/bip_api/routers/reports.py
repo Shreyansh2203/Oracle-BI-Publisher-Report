@@ -5,18 +5,17 @@ import csv
 import io
 import logging
 import zipfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal
 
 import requests
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-from bip_api.client import fetch_report_csv, report_name, report_stem
+from bip_api.client import fetch_report_csv, report_name
 from bip_api.config import Settings, get_settings
 from bip_api.exceptions import AuthError, ReportError
-from bip_api.github import commit_report, get_latest_report_from_github
+from bip_api.github import commit_report
 from bip_api.models import (
     DownloadRequest,
     FusedInvoiceItem,
@@ -30,15 +29,12 @@ from bip_api.models import (
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/reports", tags=["reports"])
-_CACHE_TIER: dict[str, int] = {"github": 0, "oracle": 1}
 
 
 @dataclass
 class _FetchResult:
     filename: str
     csv_bytes: bytes
-    commit_to_github: bool
-    source: Literal["github", "oracle"] = field(default="oracle")
 
 
 def _get_oracle_session(request: Request) -> requests.Session:
@@ -66,44 +62,18 @@ def _filter_by_receipt_number(csv_bytes: bytes, receipt_number: str) -> bytes:
     return out.getvalue().encode("utf-8")
 
 
-async def _check_github_cache(
-    item: DownloadRequest,
-    settings: Settings,
-    github_session: requests.Session,
-) -> _FetchResult | None:
-    stem = report_stem(item.report_path)
-    github_hit = await asyncio.to_thread(
-        get_latest_report_from_github, stem, settings, github_session
-    )
-    if github_hit:
-        return _FetchResult(*github_hit, commit_to_github=False, source="github")
-    return None
-
-
-async def _fetch_from_oracle(
+async def _fetch(
     item: DownloadRequest,
     settings: Settings,
     oracle_session: requests.Session,
 ) -> _FetchResult | AuthError | ReportError:
     try:
         result = await asyncio.to_thread(fetch_report_csv, item, settings, oracle_session)
-        return _FetchResult(*result, commit_to_github=True, source="oracle")
+        return _FetchResult(*result)
     except AuthError as exc:
         return exc
     except ReportError as exc:
         return exc
-
-
-async def _fetch(
-    item: DownloadRequest,
-    settings: Settings,
-    oracle_session: requests.Session,
-    github_session: requests.Session,
-) -> _FetchResult | AuthError | ReportError:
-    result = await _check_github_cache(item, settings, github_session)
-    if result:
-        return result
-    return await _fetch_from_oracle(item, settings, oracle_session)
 
 
 def _schedule_github_commit(
@@ -112,10 +82,9 @@ def _schedule_github_commit(
     settings: Settings,
     github_session: requests.Session,
 ) -> None:
-    if outcome.commit_to_github:
-        background_tasks.add_task(
-            commit_report, outcome.filename, outcome.csv_bytes, settings, github_session
-        )
+    background_tasks.add_task(
+        commit_report, outcome.filename, outcome.csv_bytes, settings, github_session
+    )
 
 
 def _apply_receipt_filter(outcome: _FetchResult, receipt_number: str | None) -> _FetchResult:
@@ -128,9 +97,7 @@ def _apply_receipt_filter(outcome: _FetchResult, receipt_number: str | None) -> 
         len(outcome.csv_bytes),
         len(filtered),
     )
-    return _FetchResult(
-        filename=outcome.filename, csv_bytes=filtered, commit_to_github=False, source=outcome.source
-    )
+    return _FetchResult(filename=outcome.filename, csv_bytes=filtered)
 
 
 @router.get("", response_model=ReportListResponse)
@@ -155,7 +122,7 @@ async def download(
             detail=f"Batch size {len(req.reports)} exceeds limit of {settings.max_batch_size}",
         )
     outcomes = await asyncio.gather(
-        *[_fetch(item, settings, oracle_session, github_session) for item in req.reports]
+        *[_fetch(item, settings, oracle_session) for item in req.reports]
     )
     if len(req.reports) == 1:
         outcome = outcomes[0]
@@ -163,7 +130,6 @@ async def download(
             raise HTTPException(status_code=401, detail=str(outcome))
         if isinstance(outcome, ReportError):
             raise HTTPException(status_code=502, detail=str(outcome))
-        cache_source = outcome.source
         _schedule_github_commit(background_tasks, outcome, settings, github_session)
         outcome = _apply_receipt_filter(outcome, req.reports[0].receipt_number)
         download_filename = f"{report_name(req.reports[0].report_path)}.csv"
@@ -173,13 +139,12 @@ async def download(
             headers={
                 "Content-Disposition": f'attachment; filename="{download_filename}"',
                 "Content-Length": str(len(outcome.csv_bytes)),
-                "X-Cache": cache_source,
+                "X-Cache": "oracle",
             },
         )
     buf = io.BytesIO()
     fetch_errors: list[str] = []
     success_count = 0
-    zip_sources: list[Literal["github", "oracle"]] = []
     used_names: dict[str, int] = {}
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for item, outcome in zip(req.reports, outcomes, strict=True):
@@ -188,7 +153,6 @@ async def download(
             if isinstance(outcome, ReportError):
                 fetch_errors.append(f"{item.report_path}: {outcome}")
             else:
-                zip_sources.append(outcome.source)
                 _schedule_github_commit(background_tasks, outcome, settings, github_session)
                 outcome = _apply_receipt_filter(outcome, item.receipt_number)
                 base_name = f"{report_name(item.report_path)}.csv"
@@ -205,12 +169,11 @@ async def download(
         raise HTTPException(status_code=502, detail="; ".join(fetch_errors))
     if fetch_errors:
         log.warning("%d/%d reports failed: %s", len(fetch_errors), len(req.reports), fetch_errors)
-    zip_cache_source = max(zip_sources, key=lambda s: _CACHE_TIER[s])
     headers: dict[str, str] = {
         "Content-Disposition": 'attachment; filename="reports.zip"',
         "X-Succeeded-Count": str(success_count),
         "X-Failed-Count": str(len(fetch_errors)),
-        "X-Cache": zip_cache_source,
+        "X-Cache": "oracle",
     }
     if fetch_errors:
         headers["X-Failed-Reports"] = "; ".join(fetch_errors)[:4096]
@@ -418,9 +381,7 @@ async def match_record(
     )
     fetch_paths = [receipt_path] + ([invoice_path] if invoice_path else [])
     items = [DownloadRequest(report_path=p) for p in fetch_paths]
-    outcomes = await asyncio.gather(
-        *[_fetch(item, settings, oracle_session, github_session) for item in items]
-    )
+    outcomes = await asyncio.gather(*[_fetch(item, settings, oracle_session) for item in items])
     receipt_outcome = outcomes[0]
     if isinstance(receipt_outcome, AuthError):
         raise HTTPException(status_code=401, detail=str(receipt_outcome))
