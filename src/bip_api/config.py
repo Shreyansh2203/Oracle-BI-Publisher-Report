@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     github_repo: str = ""
     github_branch: str = "main"
     github_reports_dir: str = "reports"
-    file_age_threshold_hours: float = 0.083  # 4 hours
+    file_age_threshold_hours: float = 4.0
     receipt_report_path: str = ""
     cors_origins: str = ""
     port: int = 8000

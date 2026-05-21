@@ -65,7 +65,7 @@ def make_github_session(pool_size: int = 10) -> requests.Session:
         total=2,
         backoff_factor=0.5,
         status_forcelist=[502, 503, 504],
-        allowed_methods=frozenset(["GET"]),
+        allowed_methods=frozenset(["GET", "DELETE"]),
     )
     adapter = HTTPAdapter(max_retries=retry, pool_connections=pool_size, pool_maxsize=pool_size)
     session.mount("https://", adapter)

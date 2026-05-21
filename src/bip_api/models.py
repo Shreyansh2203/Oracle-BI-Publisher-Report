@@ -22,8 +22,8 @@ class DownloadRequest(BaseModel):
 
     @field_validator("report_path", mode="before")
     @classmethod
-    def validate_report_path(cls, v: str) -> str:
-        if not v.strip():
+    def validate_report_path(cls, v: object) -> object:
+        if isinstance(v, str) and not v.strip():
             raise ValueError("report_path cannot be empty")
         return v
 

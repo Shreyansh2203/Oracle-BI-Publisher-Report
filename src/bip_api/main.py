@@ -21,6 +21,8 @@ log = logging.getLogger(__name__)
 
 
 class _JsonFormatter(logging.Formatter):
+    converter = time.gmtime  # emit UTC so the trailing Z is accurate
+
     def format(self, record: logging.LogRecord) -> str:
         d: dict[str, object] = {
             "ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%SZ"),
