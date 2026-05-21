@@ -6,28 +6,33 @@ on:
   pull_request:
     branches: ["main", "master"]
 
+env:
+  ORACLE_USERNAME: testuser
+  ORACLE_PASSWORD: testpass
+  ORACLE_BASE_URL: https://fake.oracle.com
+
 jobs:
-  ci:
+  lint:
     runs-on: ubuntu-latest
-    env:
-      ORACLE_USERNAME: testuser
-      ORACLE_PASSWORD: testpass
-      ORACLE_BASE_URL: https://fake.oracle.com
-
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5
+      - run: uv sync --frozen
+      - run: uv run ruff check src tests
+      - run: uv run ruff format --check src tests
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5
+      - run: uv sync --frozen
+      - run: uv run mypy src
 
-      - name: Install dependencies
-        run: uv sync --frozen
-
-      - name: Lint
-        run: uv run ruff check src tests
-
-      - name: Type check
-        run: uv run mypy src
-
-      - name: Test
-        run: uv run pytest --tb=short
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5
+      - run: uv sync --frozen
+      - run: uv run pytest --tb=short

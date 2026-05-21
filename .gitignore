@@ -1,6 +1,7 @@
 .env
 __pycache__/
 *.py[cod]
+.coverage
 .venv/
 venv/
 .mypy_cache/
@@ -10,7 +11,3 @@ venv/
 reports/
 dist/
 *.egg-info/
-JSON/
-ARCHITECTURE.md
-LICENSE 
-DOCUMENTATION.md
